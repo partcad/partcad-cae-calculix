@@ -168,6 +168,81 @@ def test_port_node_sets_separates_what_matched_from_what_did_not():
     assert [record["port"] for record in empty] == ["far"]
 
 
+def test_two_calls_can_be_told_apart_by_their_prefix():
+    """The bug this exists for answered `0.0000 mm` rather than failing.
+
+    Every caller calls `port_node_sets` twice, once for what is held and once for
+    what is loaded, and each call numbers from zero. Under one shared prefix both
+    first sets are called `PORT0`; CalculiX merges them silently, so the encastre
+    holds the loaded nodes too and the load pushes on nodes that cannot move. The
+    deck is valid, `ccx` is happy, and the deflection comes back as zero -- which
+    is the one wrong answer a reader might accept.
+    """
+    mesh = _one_tetrahedron()
+    here = [{"port": "root", "location": [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0]}]
+
+    held, _ = ccx.port_node_sets(mesh, here, 0.2, prefix="FIX")
+    loaded, _ = ccx.port_node_sets(mesh, here, 0.2, prefix="LOAD")
+
+    assert [name for name, _n, _r in held] == ["FIX0"]
+    assert [name for name, _n, _r in loaded] == ["LOAD0"]
+    # The point of the whole thing: no name is claimed by both.
+    assert not {name for name, _n, _r in held} & {name for name, _n, _r in loaded}
+
+
+class _FakeGmsh:
+    """Just enough of the gmsh module for `_tetrahedra` to read one element."""
+
+    def __init__(self, element_type, connectivity):
+        outer = self
+
+        class _Mesh:
+            def getElements(self, dim):
+                assert dim == 3
+                return ([element_type], [[1]], [list(connectivity)])
+
+        class _Model:
+            mesh = _Mesh()
+
+        self.model = _Model()
+        del outer
+
+
+def test_a_first_order_tetrahedron_is_passed_through_as_gmsh_wrote_it():
+    """C3D4 and gmsh's TET4 agree on all four corners, so nothing is reordered."""
+    keyword, elements = ccx._tetrahedra(_FakeGmsh(4, [11, 12, 13, 14]), 1)
+    assert keyword == "C3D4"
+    assert elements == [(1, [11, 12, 13, 14])]
+
+
+def test_a_second_order_tetrahedron_is_reordered_for_calculix():
+    """The bug this exists for rejected every element in every mesh.
+
+    gmsh's TET10 and CalculiX's C3D10 agree on the four corners and on the first
+    four mid-side nodes, and swap the last two: gmsh's 9th sits on edge 3-4 where
+    CalculiX wants edge 2-4. Handed over unswapped, `ccx` answers `*ERROR in
+    e_c3d: nonpositive jacobian determinant` for every element, the step never
+    runs, and the `.frd` holds a mesh and no fields -- indistinguishable, from
+    the outside, from an analysis that did not converge. `mesh_order: 2` is the
+    default, so this was all of FEA.
+    """
+    gmsh_order = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    keyword, elements = ccx._tetrahedra(_FakeGmsh(11, gmsh_order), 2)
+    assert keyword == "C3D10"
+    (_id, connectivity) = elements[0]
+    assert connectivity == [1, 2, 3, 4, 5, 6, 7, 8, 10, 9]
+    # The corners and the first four mid-side nodes are untouched; only the last
+    # two move, and they move by swapping rather than by rotating.
+    assert connectivity[:8] == gmsh_order[:8]
+    assert sorted(connectivity) == gmsh_order
+
+
+def test_an_element_of_another_type_is_not_collected():
+    """A mesh can hold more than tetrahedra; only the asked-for type is read."""
+    _keyword, elements = ccx._tetrahedra(_FakeGmsh(4, [1, 2, 3, 4]), 2)
+    assert elements == []
+
+
 # --------------------------------------------------------------------------- #
 # The deck                                                                    #
 # --------------------------------------------------------------------------- #

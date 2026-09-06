@@ -38,8 +38,8 @@ desc: |
 # package, and pip cannot install it -- see README.md for how to get one.
 pythonRequirements:
   - gmsh==4.15.0
-  - numpy==2.4.0
-  - trimesh==4.9.1
+  - numpy==2.4.1
+  - trimesh==4.9.0
 
 cae:
   fea:

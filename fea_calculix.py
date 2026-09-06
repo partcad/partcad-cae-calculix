@@ -36,9 +36,16 @@ mean something:
   hold nothing still answers with nonsense rather than with an error.
 """
 
+import os
+import sys
 import tempfile
 
-import calculix_common as ccx
+# `runpy.run_path()` is what the sandbox runs this with, and it does not put
+# the script's own directory on `sys.path` -- so the sibling module below is
+# not importable without saying where it is. PartCAD's own sibling-importing
+# script does exactly this; see `partcad/builtin/render/render_dxf.py`.
+sys.path.append(os.path.dirname(__file__))
+import calculix_common as ccx  # noqa: E402
 
 # The severities a finding carries. PartCAD does not interpret them -- any
 # finding at all fails `pc test` -- but they order the list `pc cae` prints and
@@ -80,8 +87,8 @@ def _analyse(path, request):
             "'fea:' fixes nothing, so the part is free to float: name at least one interface under 'fix:'"
         )
 
-    fixed_sets, fixed_empty = ccx.port_node_sets(mesh, fixed, request.get("port_radius", 0.05))
-    loaded_sets, loaded_empty = ccx.port_node_sets(mesh, loaded, request.get("port_radius", 0.05))
+    fixed_sets, fixed_empty = ccx.port_node_sets(mesh, fixed, request.get("port_radius", 0.05), prefix="FIX")
+    loaded_sets, loaded_empty = ccx.port_node_sets(mesh, loaded, request.get("port_radius", 0.05), prefix="LOAD")
     for record in fixed_empty + loaded_empty:
         findings.append(
             {

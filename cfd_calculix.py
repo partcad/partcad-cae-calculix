@@ -26,9 +26,15 @@ rather than asked for one, which is what `duration` and `time_step` are.
 """
 
 import math
+import os
+import sys
 import tempfile
 
-import calculix_common as ccx
+# See the note beside the same two lines in `fea_calculix.py`:
+# `runpy.run_path()` leaves the script's directory off `sys.path`, so the
+# sibling import below cannot resolve without it.
+sys.path.append(os.path.dirname(__file__))
+import calculix_common as ccx  # noqa: E402
 
 ERROR = "error"
 WARNING = "warning"
@@ -68,8 +74,8 @@ def _analyse(path, request):
         )
 
     radius = request.get("port_radius", 0.05)
-    wall_sets, wall_empty = ccx.port_node_sets(mesh, walls, radius)
-    driven_sets, driven_empty = ccx.port_node_sets(mesh, driven, radius)
+    wall_sets, wall_empty = ccx.port_node_sets(mesh, walls, radius, prefix="WALL")
+    driven_sets, driven_empty = ccx.port_node_sets(mesh, driven, radius, prefix="IN")
     for record in wall_empty + driven_empty:
         findings.append(
             {

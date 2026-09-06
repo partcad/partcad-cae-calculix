@@ -245,7 +245,19 @@ def _tetrahedra(gmsh, order):
             continue
         for index, element_id in enumerate(ids):
             start = index * per_element
-            elements.append((int(element_id), [int(n) for n in nodes[start : start + per_element]]))
+            connectivity = [int(n) for n in nodes[start : start + per_element]]
+            if per_element == 10:
+                # gmsh's TET10 and CalculiX's C3D10 agree on the four corners and
+                # on the first four mid-side nodes, and disagree on the last two:
+                # gmsh's 9th sits on edge 3-4 where CalculiX wants edge 2-4, and
+                # its 10th the other way round. Left unswapped, `ccx` rejects
+                # every element with `*ERROR in e_c3d: nonpositive jacobian
+                # determinant`, the step never runs, and the `.frd` comes back
+                # holding the mesh and no fields -- which reads exactly like a
+                # solver that did not converge. `mesh_order: 2` is the default,
+                # so this is the whole of FEA and not a corner of it.
+                connectivity[8], connectivity[9] = connectivity[9], connectivity[8]
+            elements.append((int(element_id), connectivity))
     return keyword, elements
 
 
@@ -277,7 +289,7 @@ def deck_nset(name, node_ids):
     return lines
 
 
-def port_node_sets(mesh, boundary, radius_fraction):
+def port_node_sets(mesh, boundary, radius_fraction, prefix="PORT"):
     """A node set per boundary condition, and the ones that reached no material.
 
     `boundary` is what PartCAD resolved: one record per port a `fix:` or a
@@ -286,6 +298,14 @@ def port_node_sets(mesh, boundary, radius_fraction):
     `(name, node ids, record)` and `empty` names the records whose neighbourhood
     held no mesh node -- a port floating clear of the material, which is a
     finding about the part rather than a failure of the solver.
+
+    `prefix` is not decoration. Every caller calls this twice -- once for what is
+    held and once for what is loaded -- and each call numbers from zero, so one
+    shared prefix names two different node sets `PORT0`. CalculiX does not
+    complain about that; it merges them, and then the encastre holds the loaded
+    nodes still and the load is applied to nodes that cannot move. The answer
+    that comes back is `0.0000 mm`, which is wrong in the one way a reader might
+    believe. So each call passes a prefix of its own.
     """
     radius = mesh.extent * float(radius_fraction)
     sets = []
@@ -297,7 +317,7 @@ def port_node_sets(mesh, boundary, radius_fraction):
         if not nodes:
             empty.append(record)
             continue
-        sets.append(("PORT%d" % index, nodes, record))
+        sets.append(("%s%d" % (prefix, index), nodes, record))
     return sets, empty
 
 
