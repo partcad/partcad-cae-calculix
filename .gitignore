@@ -1,0 +1,14 @@
+# What PartCAD leaves behind in a package it has worked in.
+.partcad
+__pycache__
+*.pyc
+
+# What an analysis writes beside the part it analysed.
+*.fea.glb
+*.cfd.glb
+
+# What CalculiX leaves behind when it is run by hand rather than in a sandbox.
+*.frd
+*.dat
+*.cvg
+*.sta

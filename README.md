@@ -1,0 +1,137 @@
+# partcad-cae-calculix
+
+The [CalculiX](https://www.calculix.de/) implementations of PartCAD's two engineering analyses: what
+`pc cae fea` and `pc cae cfd` run by default.
+
+This is a [PartCAD](https://partcad.org/) package, not a Python distribution. Nothing here is installed by
+hand: PartCAD fetches the package as a dependency and installs the Python requirements below into the sandbox
+it runs the implementations in. It is reached from the public index as `//pub/feature/cae/calculix`, and the
+`caeFeaImplementation` / `caeCfdImplementation` user configuration options point at
+`//pub/feature/cae/calculix:fea` and `:cfd` out of the box.
+
+## Using it
+
+Declare the boundary conditions on the part, in a section named after the analysis. They belong to the part
+rather than to whoever analyses it — a bracket is bolted down at the same holes whichever solver is asked:
+
+```yaml
+parts:
+  bracket:
+    type: build123d
+    path: bracket.py
+    implements:
+      m3-screw: {left: ..., right: ...}
+      hook:
+    fea:
+      fix:
+        - m3-screw          # every instance of this interface is held still
+      load:
+        hook: 5 kg          # every instance of this one carries this
+```
+
+Then:
+
+```shell
+pc cae fea :bracket                 # the model, and the findings
+pc cae fea --json :bracket          # the findings as the JSON array they are
+pc test -f fea :bracket             # the same analysis, as a check
+```
+
+`load` values are forces. Write a number and a unit — `n`, `nm`, `mn`, `kn` or `newton` for force, `mg`, `g`,
+`kg`, `ton`, `tonne`, `lb` or `pound` for mass, matched case-insensitively, with or without a space and with
+or without a plural `s` — or a bare number, which is a mass in kilograms. PartCAD weighs a mass into a force
+before this package sees it, so everything here is newtons.
+
+The result model is written to `<part>.<analysis>.glb` and shown in the PartCAD Viewer's FEA and CFD tabs,
+turned and zoomed like any other 3D object. The findings are listed under it.
+
+## What it is
+
+Two file types in a `cae:` section, which is the same shape as an `export:` or a `render:` one — `path` names
+the script, `pythonRequirements` describes its sandbox, `extension` says what it writes, and everything else
+is a parameter handed to the script:
+
+| File type | What it does | Writes |
+| --- | --- | --- |
+| `fea` | A linear static stress analysis of the part | a glTF coloured by von Mises stress |
+| `cfd` | Incompressible flow through the part, read as the fluid volume | a glTF coloured by speed |
+
+Both answer with **findings**: the JSON array of what the analysis has to say about the part. An empty one is
+a pass, which is what `pc test`'s `fea` and `cfd` checks require.
+
+Every parameter is documented in `partcad.yaml` beside its default — the mesh density, the material, the
+thresholds that decide what counts as a finding. A package re-tunes any of them in a `cae:` section of its
+own, and one object overrides them again in its own:
+
+```yaml
+cae:
+  fea:
+    # The implementation stays this package's; only the parameters change.
+    package: //pub/feature/cae/calculix
+    path: fea_calculix.py
+    youngs_modulus: 6.9e+10        # aluminium
+    yield_strength: 2.4e+8
+    mesh_size: 0.02
+```
+
+### The pipeline
+
+    the part  ->  gmsh  ->  a tetrahedral mesh
+    a port    ->  the nodes within `port_radius` of it  ->  a CalculiX node set
+    a deck    ->  ccx  ->  a .frd
+    a field   ->  a colour per node  ->  a binary glTF
+
+`calculix_common.py` is all of that except the deck and the field, which are the only two things the two
+analyses actually differ in.
+
+### A port is a neighbourhood, not a face
+
+This is the one modelling decision worth arguing with. A PartCAD port is a coordinate frame: it says where a
+bolt goes, not which surface it clamps. So a fixed port becomes the mesh nodes within `port_radius` (a
+fraction of the part's largest dimension) of where the port is, and a loaded port spreads its force over the
+same neighbourhood. Get that radius wrong and the answer is wrong in a way that looks plausible — too small
+and the load is a point load with an artificial stress concentration under it, too large and a bolt hole
+clamps half the bracket. It is a parameter of the file type for exactly that reason, and a port that reaches
+no material at all is reported as a finding rather than passed over.
+
+`pc render --with-ports` draws the ports on a projection of the part, which is the quickest way to see what
+the solver was actually told.
+
+### What `cfd:` reads the part as
+
+The **fluid volume** — the space the fluid is in, not the wall around it. A duct is analysed by declaring the
+bore as a part, not the casting. `fix:` names the walls (no slip) and `load:` names where the flow is driven:
+a force on a boundary divided by the area of that boundary is a pressure, and pressure is what an
+incompressible solver is driven by. That is why `cfd:` takes a force rather than a velocity — it is the same
+declaration the part already makes for FEA, in the same units, meaning the same physical thing.
+
+## What it needs
+
+`gmsh`, `numpy` and `trimesh` are `pythonRequirements` and PartCAD installs them into the sandbox itself.
+
+**`ccx` is not one of them.** It is a native executable, pip cannot install it, and PartCAD does not ship
+solvers. Install it the way the platform does:
+
+```shell
+apt install calculix-ccx                     # Debian, Ubuntu
+brew install calculix-ccx                    # macOS
+conda install -c conda-forge calculix        # anywhere conda is
+```
+
+It is looked up on `PATH` and then in the usual places; `PARTCAD_CCX` names it outright on a machine where it
+lives somewhere else. A machine with no solver is told so as a sentence saying what to install — that is a
+finding about the machine, not about the part.
+
+## Status
+
+**Not yet validated against a real solver.** The pipeline is written against CalculiX 2.20+ and gmsh 4.x, and
+it has not been run: the machine it was written on has neither. The deck-writing, the `.frd` parsing and the
+port-to-node-set mapping are the parts most likely to need correcting. Treat the numbers with suspicion until
+somebody has checked one against a case with a known answer — a cantilever beam under a tip load is the usual
+one, and its closed form is in every strength-of-materials text.
+
+Corrections welcome, and a checked case most of all.
+
+## Licence
+
+Apache License 2.0. See [LICENSE.txt](./LICENSE.txt).
