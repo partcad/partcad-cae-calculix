@@ -339,6 +339,26 @@ def run_ccx(lines, work, name="job"):
 # --------------------------------------------------------------------------- #
 
 
+# The columns of a `.frd` record, from the Fortran formats the CalculiX manual
+# gives for them. A block header is `(1X,'-4',2X,A8,2I5)` and a nodal value line
+# is `(1X,'-1',I10,6E12.5)`, so:
+#
+#   the record key `-1`/`-3`/`-4`/`-5`   1X + 2 chars   = columns 0..2
+#   a block's name (on a `-4` line)      2X + A8        = columns 5..12
+#   the node number (on a `-1` line)     I10            = columns 3..12
+#   each value after it                  E12.5          = 12 columns each
+#
+# Written down rather than inlined because getting one of them wrong is silent:
+# the parser reads no blocks at all and every field comes back empty, which
+# looks exactly like a solver that did not converge.
+RECORD_KEY_WIDTH = 3
+BLOCK_NAME_AT = 5
+BLOCK_NAME_WIDTH = 8
+NODE_WIDTH = 10
+VALUES_AT = 13
+VALUE_WIDTH = 12
+
+
 def read_frd(path, blocks):
     """Read named result blocks out of a CalculiX `.frd` file.
 
@@ -347,10 +367,17 @@ def read_frd(path, blocks):
     holding the **last** step in the file, which for a transient run is the one
     the solution was marched to.
 
-    The `.frd` format is fixed-column ASCII and is documented in the CalculiX
-    manual. Only what is needed is parsed: a `-4` line opens a block and names
-    it, `-5` lines name its components, `-1` lines carry one node's values, and
-    `-3` closes it.
+    The `.frd` format is fixed-column ASCII, and the columns are the ones the
+    CalculiX manual gives as Fortran formats. Only what is needed is parsed: a
+    `-4` line opens a block and names it, `-5` lines name its components, `-1`
+    lines carry one node's values, and `-3` closes it.
+
+    The widths below are not cosmetic and the fields must **not** be split on
+    whitespace instead. E12.5 fills its 12 columns whenever the value is
+    negative, so two adjacent negative components run together with no space
+    between them -- `-0.10000E-03-0.20000E-03` is two numbers, and a whitespace
+    split reads it as one unparseable one. That is the case
+    `test_read_frd_reads_values_that_run_together` holds.
     """
     wanted = {name.upper(): count for name, count in blocks.items()}
     results = {name: {} for name in wanted}
@@ -359,9 +386,9 @@ def read_frd(path, blocks):
 
     with open(path, "r", errors="replace") as f:
         for line in f:
-            key = line[:5].strip()
+            key = line[:RECORD_KEY_WIDTH].strip()
             if key == "-4":
-                name = line[5:18].strip().upper()
+                name = line[BLOCK_NAME_AT : BLOCK_NAME_AT + BLOCK_NAME_WIDTH].strip().upper()
                 if name in wanted:
                     current = name
                     components = wanted[name]
@@ -376,11 +403,14 @@ def read_frd(path, blocks):
             if key != "-1" or current is None:
                 continue
 
-            node = int(line[5:15])
+            node_text = line[RECORD_KEY_WIDTH : RECORD_KEY_WIDTH + NODE_WIDTH].strip()
+            if not node_text:
+                continue
+            node = int(node_text)
             values = []
             for index in range(components):
-                start = 15 + index * 12
-                text = line[start : start + 12].strip()
+                start = VALUES_AT + index * VALUE_WIDTH
+                text = line[start : start + VALUE_WIDTH].strip()
                 if not text:
                     break
                 values.append(float(text))

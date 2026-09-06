@@ -122,13 +122,31 @@ It is looked up on `PATH` and then in the usual places; `PARTCAD_CCX` names it o
 lives somewhere else. A machine with no solver is told so as a sentence saying what to install — that is a
 finding about the machine, not about the part.
 
+## Tests
+
+```shell
+pytest test_calculix.py          # needs numpy and pyyaml; no solver, no gmsh
+```
+
+`ccx` is a native executable and `gmsh` is a large wheel, so a contributor may have neither — which rules out
+an end-to-end run and does *not* rule out the parts most likely to be quietly wrong. What is covered is the
+`.frd` reader (fixed-column parsing, including the case where two negative values fill their fields and touch,
+which is what rules out splitting the line on whitespace), `von_mises` against its closed form,
+`surface_triangles` finding exactly the faces one element owns, the port-to-node-set mapping, the deck
+writer's 16-per-line node sets, and that a machine with no solver is told what to install.
+
+That suite has already earned itself: the `.frd` reader's column offsets were wrong on the first draft — every
+field came back empty, which looks exactly like a solver that did not converge — and the offsets are now
+written down in `calculix_common.py` beside the Fortran formats they come from.
+
 ## Status
 
-**Not yet validated against a real solver.** The pipeline is written against CalculiX 2.20+ and gmsh 4.x, and
-it has not been run: the machine it was written on has neither. The deck-writing, the `.frd` parsing and the
-port-to-node-set mapping are the parts most likely to need correcting. Treat the numbers with suspicion until
-somebody has checked one against a case with a known answer — a cantilever beam under a tip load is the usual
-one, and its closed form is in every strength-of-materials text.
+**Not yet validated end to end against a real solver.** The pipeline is written against CalculiX 2.20+ and
+gmsh 4.x, and it has not been run: the machine it was written on has neither. What the tests above cover is
+sound; what they cannot reach is whether `ccx` accepts the decks, whether the boundary conditions land where a
+person would put them, and whether the numbers are right. Treat those with suspicion until somebody has
+checked one against a case with a known answer — a cantilever beam under a tip load is the usual one, and its
+closed form is in every strength-of-materials text.
 
 Corrections welcome, and a checked case most of all.
 
