@@ -243,6 +243,44 @@ def test_an_element_of_another_type_is_not_collected():
     assert elements == []
 
 
+def test_the_fluid_increment_cap_follows_the_run_that_was_asked_for():
+    """`INCF` used to be a literal million, and `*NODE FILE` writes one block per
+    increment: an observed run reached 5 GB of `.frd` in minutes and was still
+    growing. The cap is now what the requested duration and time step imply.
+    """
+    import cfd_calculix
+
+    cap = cfd_calculix._increment_cap
+    # Twice the steps the request implies, so a solver taking smaller steps than
+    # it was asked for still gets to the end.
+    assert cap({"duration": 2.0, "time_step": 0.005}) == 800
+    assert cap({}) == 200
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        {"duration": 1.0, "time_step": 0},
+        {"duration": 0, "time_step": 0.01},
+        {"duration": "soon", "time_step": "a bit"},
+    ],
+)
+def test_a_nonsensical_run_still_produces_a_deck(request_):
+    """A bad number is a finding for the solver to report, not a divide by zero
+    in the code that writes the deck."""
+    import cfd_calculix
+
+    assert cfd_calculix._increment_cap(request_) == 10000
+
+
+def test_the_cap_is_bounded_at_both_ends():
+    import cfd_calculix
+
+    cap = cfd_calculix._increment_cap
+    assert cap({"duration": 0.001, "time_step": 0.01}) == 100
+    assert cap({"duration": 1e9, "time_step": 1e-6}) == 1000000
+
+
 # --------------------------------------------------------------------------- #
 # The deck                                                                    #
 # --------------------------------------------------------------------------- #

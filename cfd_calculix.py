@@ -96,19 +96,24 @@ def _analyse(path, request):
     with tempfile.TemporaryDirectory() as work:
         deck = _deck(mesh, wall_sets, driven_sets, request, radius)
         results = ccx.run_ccx(deck, work)
-        fields = ccx.read_frd(results, {"VELO": 3, "PRESSURE": 1, "STRESS": 1})
+        # A CFD step is not named like a structural one: CalculiX writes `V3DF`
+        # for velocity and `PS3DF` for static pressure, where a static step
+        # writes `DISP` and `STRESS`. Asked for the structural names, `read_frd`
+        # matched nothing at all and every converged run still looked empty.
+        fields = ccx.read_frd(results, {"V3DF": 3, "PS3DF": 1, "SA3DF": 1})
 
         velocities = {
-            node: math.sqrt(values[0] ** 2 + values[1] ** 2 + values[2] ** 2) for node, values in fields["VELO"].items()
+            node: math.sqrt(values[0] ** 2 + values[1] ** 2 + values[2] ** 2) for node, values in fields["V3DF"].items()
         }
         if not velocities:
             raise ccx.SolverFailed(
                 "CalculiX produced no velocities: the flow did not converge. "
                 "A smaller 'time_step' or a longer 'duration' is the usual remedy."
             )
-        # CalculiX writes static pressure under 'PRESSURE' for a CFD step, and
-        # older versions under 'STRESS'; take whichever came back.
-        pressures = fields["PRESSURE"] or fields["STRESS"]
+        # Static pressure is `PS3DF`; `SA3DF` is asked for as well because some
+        # builds write the same field under it, and an empty dictionary costs
+        # nothing.
+        pressures = fields["PS3DF"] or fields["SA3DF"]
 
         speed_field = ccx.field_per_node(mesh, velocities)
         ccx.write_glb(path, mesh.coordinates, mesh.surface_triangles(), speed_field, low=0.0)
@@ -159,28 +164,77 @@ def _verdict(peak_speed, pressure_drop, request):
     return findings
 
 
+def _increment_cap(request):
+    """How many fluid increments the requested run can possibly need.
+
+    `duration / time_step`, doubled so that a solver taking smaller steps than
+    it was asked for still finishes, and floored so that a nonsensical request
+    still produces a deck. It is a cap and not a target: a steady-state run
+    stops when it converges.
+    """
+    try:
+        step = float(request.get("time_step", 0.01))
+        duration = float(request.get("duration", 1.0))
+    except (TypeError, ValueError):
+        return 10000
+    if step <= 0 or duration <= 0:
+        return 10000
+    return max(100, min(1000000, int(2 * duration / step)))
+
+
 def _deck(mesh, wall_sets, driven_sets, request, radius_fraction):
     """The CalculiX CFD deck: the mesh, the fluid, the boundaries, the step."""
     lines = ccx.deck_mesh(mesh)
     for name, nodes, _record in wall_sets + driven_sets:
         lines.extend(ccx.deck_nset(name, nodes))
 
+    # Every card below except the first two is here because CalculiX asked for
+    # it by name and refused the deck without it. An isothermal incompressible
+    # run uses almost none of them, which is why the first draft left them out
+    # and why `*CFD` was rejected before the solve began:
+    #
+    #   *ERROR reading *CFD: please define initial conditions for the temperature
+    #   *ERROR in initialcfd: specific gas constant for material FLUID is close
+    #          to zero; maybe it has not been defined
+    #   *ERROR in inicialcfd: initial pressure must be strictly positive
+    #   *ERROR in materialdata_cond: fluid conductivity is lacking
+    #
+    # `*FLUID CONSTANTS` does not cover conductivity, whatever the comment that
+    # used to sit here said: its three numbers are specific heat, dynamic
+    # viscosity and temperature. Conductivity has a card of its own.
+    temperature = 293.0
+    pressure_reference = 1.0e5
     lines.extend(
         [
             "*MATERIAL, NAME=FLUID",
             "*FLUID CONSTANTS",
-            # Specific heat and conductivity: an isothermal incompressible run
-            # does not use either, and CalculiX wants the card all the same.
-            "1005., %.9g, 293." % float(request.get("viscosity", 1.82e-5)),
+            # Specific heat, dynamic viscosity, temperature.
+            "1005., %.9g, %.9g" % (float(request.get("viscosity", 1.82e-5)), temperature),
             "*DENSITY",
             "%.9g" % float(request.get("density", 1.204)),
+            "*CONDUCTIVITY",
+            "0.0257",
+            "*SPECIFIC GAS CONSTANT",
+            "287.",
             "*SOLID SECTION, ELSET=EALL, MATERIAL=FLUID",
             "*PHYSICAL CONSTANTS, ABSOLUTE ZERO=0.",
             "*INITIAL CONDITIONS, TYPE=FLUID VELOCITY",
             "NALL, 1, 0.",
             "NALL, 2, 0.",
             "NALL, 3, 0.",
-            "*STEP, INCF=1000000",
+            "*INITIAL CONDITIONS, TYPE=TEMPERATURE",
+            "NALL, %.9g" % temperature,
+            # Strictly positive, or `inicialcfd` refuses it. It is a reference
+            # level for an incompressible run, not a physical claim.
+            "*INITIAL CONDITIONS, TYPE=PRESSURE",
+            "NALL, %.9g" % pressure_reference,
+            # Bounded, and bounded by the run that was asked for. `INCF` caps the
+            # fluid increments, and an unqualified `*NODE FILE` writes a result
+            # block per increment -- so the million that used to be here is a
+            # million blocks, and one observed run reached 5 GB of `.frd` in
+            # minutes and was still growing. The number of steps the requested
+            # duration and time step imply, with room to spare, is the honest cap.
+            "*STEP, INCF=%d" % _increment_cap(request),
             "*CFD, STEADY STATE, COMPRESSIBLE=NO",
             "%.9g, %.9g" % (float(request.get("time_step", 0.01)), float(request.get("duration", 1.0))),
         ]

@@ -9,6 +9,28 @@ it runs the implementations in. It is reached from the public index as `//pub/fe
 `caeFeaImplementation` / `caeCfdImplementation` user configuration options point at
 `//pub/feature/cae/calculix:fea` and `:cfd` out of the box.
 
+## Status: `fea` works, `cfd` does not yet
+
+Say this before anything else, because the two are not in the same state.
+
+**`fea` is validated against a case with a known answer.** PartCAD's
+[`examples/feature_cae`](https://github.com/partcad/partcad/tree/devel/examples/feature_cae) cantilever — 100 x
+10 x 10 mm of steel, clamped at one end, 100 N at the other — comes back at **0.1655 mm**, inside the
+0.16-0.18 mm the port-neighbourhood model predicts, and stable from 434 to 6468 elements. Peak von Mises
+58.3 MPa against a bending figure of 60.0 MPa. Run with CalculiX 2.23 on macOS arm64.
+
+**`cfd` does not produce a usable answer.** The deck is accepted by CalculiX now, and it still does not
+converge: observed runs settle at a dead field, peak speed of order 1e-16 m/s, and end with
+
+```
+ *ERROR in compdt; strongly decreasing time increment; the solution diverged
+```
+
+At least one cause is structural rather than a typo: `cfd:` can name walls (`fix:`) and an inlet (`load:`) and
+has no way to name an **outlet**, so an incompressible problem is posed with no downstream pressure reference.
+Do not read a number out of `cfd` yet. It is shipped because the machinery around it — the section, the
+command, the tab — is worth having in place, not because it answers.
+
 ## Using it
 
 Declare the boundary conditions on the part, in a section named after the analysis. They belong to the part
