@@ -19,17 +19,42 @@ Say this before anything else, because the two are not in the same state.
 0.16-0.18 mm the port-neighbourhood model predicts, and stable from 434 to 6468 elements. Peak von Mises
 58.3 MPa against a bending figure of 60.0 MPa. Run with CalculiX 2.23 on macOS arm64.
 
-**`cfd` does not produce a usable answer.** The deck is accepted by CalculiX now, and it still does not
-converge: observed runs settle at a dead field, peak speed of order 1e-16 m/s, and end with
+**`cfd` does not produce a usable answer, and it is now clear why.** Three things were wrong with it. Two are
+fixed:
+
+* **No outlet.** An incompressible flow is posed by *differences* in pressure, and `cfd:` could name only walls
+  (`fix:`) and an inlet (`load:`). With nothing saying where the flow goes there is no downstream reference, and
+  CalculiX answers with a field that never moves — peak speed of order 1e-16 m/s. `cfd:` now takes an `outlet:`,
+  and a `cfd:` without one is refused with a sentence saying so rather than solved into a dead field.
+* **No temperature anywhere.** An isothermal run still solves the energy equation, and nothing pinned it: the
+  field drifted off its initial value and the run ended in `*ERROR in initialcfd: absolute temperature is
+  nearly zero`, which reads as a mistake on the `*PHYSICAL CONSTANTS` card and is not one. The walls and the
+  inlet are now held at the reference temperature.
+
+The third is not, and it is the solver's:
 
 ```
  *ERROR in compdt; strongly decreasing time increment; the solution diverged
 ```
 
-At least one cause is structural rather than a typo: `cfd:` can name walls (`fix:`) and an inlet (`load:`) and
-has no way to name an **outlet**, so an incompressible problem is posed with no downstream pressure reference.
-Do not read a number out of `cfd` yet. It is shipped because the machinery around it — the section, the
-command, the tab — is worth having in place, not because it answers.
+A deck built by hand for the same pipe — true end faces as inlet and outlet, the whole lateral surface as the
+no-slip wall, 808 nodes rather than 178 — diverges identically, driven by pressure or by a prescribed inlet
+velocity, at reference pressures from 1 Pa to 1e5 Pa. The first increment CalculiX computes for it is 8.1e-7 s,
+an *acoustic* step for a flow moving at 0.02 m/s: `*CFD` demands `*SPECIFIC GAS CONSTANT` even under
+`COMPRESSIBLE=NO` (leave it out and `initialcfd` refuses the deck), and the step derived from that speed of
+sound collapses to 6.7e-9 s within one iteration.
+
+That gas constant does control the increment, and it is not a way out. Lowering it buys more increments and
+then breaks differently: at a tenth it ends in `con2phys: too many iterations` instead, at a hundredth it
+marches far longer and still ends in `compdt`. A deck tuned that way would also be answering with
+thermodynamics that were made up to move a number, which is not a result worth having.
+
+So it is solver work, not tuning. **Do not read a number out of `cfd`.** It is shipped because the machinery
+around it — the section, the command, the tab — is worth having in place, not because it answers.
+
+One more thing is worth knowing even once a solver converges: a CFD boundary condition is a **surface**, and a
+PartCAD port is a coordinate frame. The ball of nodes within `port_radius` of the pipe's inlet contains exactly
+one node. Whatever fixes the solver will also have to find the *face* a port lies on.
 
 ## Using it
 
@@ -122,10 +147,28 @@ the solver was actually told.
 ### What `cfd:` reads the part as
 
 The **fluid volume** — the space the fluid is in, not the wall around it. A duct is analysed by declaring the
-bore as a part, not the casting. `fix:` names the walls (no slip) and `load:` names where the flow is driven:
-a force on a boundary divided by the area of that boundary is a pressure, and pressure is what an
+bore as a part, not the casting. `fix:` names the walls (no slip), `load:` names where the flow is driven, and
+`outlet:` names where it leaves:
+
+```yaml
+    cfd:
+      fix:
+        - pipe-wall     # no slip
+      load:
+        pipe-inlet: 5 mN
+      outlet:
+        - pipe-outlet   # held at the reference pressure
+```
+
+A force on a boundary divided by the area of that boundary is a pressure, and pressure is what an
 incompressible solver is driven by. That is why `cfd:` takes a force rather than a velocity — it is the same
-declaration the part already makes for FEA, in the same units, meaning the same physical thing.
+declaration the part already makes for FEA, in the same units, meaning the same physical thing. The inlet is
+written as a *rise* above the reference and the outlet as the reference itself, because a difference is the
+whole of what drives the flow: an absolute few hundred pascals under a field initialised at one atmosphere
+says the fluid is being sucked backwards, and answers with a dead field.
+
+`outlet:` is required. A part that names an inlet and no outlet is not asking a harder question, it is asking
+one that has no answer.
 
 ## What it needs
 
