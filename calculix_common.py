@@ -48,7 +48,15 @@ MM_PER_M = 1000.0
 
 
 class SolverMissing(Exception):
-    """No CalculiX on this machine, with the sentence that says what to install."""
+    """Something this analysis needs is not on this machine.
+
+    The sentence says which component, what to do about it, and -- where the
+    answer is "nothing, not here" -- which platforms it is true of. PartCAD
+    reports it verbatim as the reason the analysis failed, so it is the whole of
+    what a user gets; "not installed" without a remedy sends them to a search
+    engine, and without a platform it sends them to install something that
+    cannot be installed.
+    """
 
 
 class SolverFailed(Exception):
@@ -73,11 +81,19 @@ def _gmsh():
     except ImportError as e:
         if platform.machine() in ("aarch64", "arm64") and platform.system() == "Linux":
             raise SolverMissing(
-                "gmsh publishes no wheel for 64-bit ARM Linux and no source distribution, so this "
-                "analysis cannot run on this machine. Use an x86_64 machine, or build gmsh's Python "
-                "module yourself and put it on the sandbox's path."
+                "this analysis cannot run on 64-bit ARM Linux at all. Its mesher, gmsh, publishes "
+                "four wheels per release -- macOS x86_64, macOS arm64, manylinux x86_64 and "
+                "win_amd64 -- and no linux aarch64 wheel and no source distribution, in every "
+                "release from 4.12 through 4.15. There is nothing for pip to install and nothing to "
+                "build from, and no version of this package changes that. Working platforms: "
+                "x86_64 Linux, x86_64 and Apple-silicon macOS, x86_64 Windows. Underlying error: %s" % e
             ) from e
-        raise SolverMissing("gmsh is not installed in this sandbox: %s" % e) from e
+        raise SolverMissing(
+            "gmsh is not in this analysis's sandbox on this %s-%s machine, though it publishes a "
+            "wheel for it. Provisioning the sandbox is what installs it, so this is a provisioning "
+            "failure rather than a platform limit -- the log above says what pip reported. "
+            "Underlying error: %s" % (platform.system(), platform.machine(), e)
+        ) from e
     return gmsh
 
 
@@ -100,9 +116,17 @@ def find_ccx():
                 return candidate
 
     raise SolverMissing(
-        "CalculiX (ccx) is not installed on this machine. Install it with "
+        "the CalculiX solver (ccx) is not installed on this %s machine, and pip cannot install it: "
+        "it is a native executable rather than a Python package. Install it with "
         "'apt install calculix-ccx', 'brew install calculix-ccx' or "
-        "'conda install -c conda-forge calculix', or point %s at the executable." % CCX_ENV
+        "'conda install -c conda-forge calculix', or point %s at the executable. "
+        "Searched: %s on PATH, then %s"
+        % (
+            platform.system(),
+            CCX_ENV,
+            ", ".join(CCX_NAMES),
+            ", ".join(CCX_DIRECTORIES) if CCX_DIRECTORIES else "nowhere else",
+        )
     )
 
 
