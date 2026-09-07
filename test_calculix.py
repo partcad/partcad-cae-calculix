@@ -21,6 +21,7 @@ CI runner alike may have neither. That rules out an end-to-end run, and it does
 Run it with `pytest test_calculix.py`. It needs `numpy` and nothing else.
 """
 
+import re
 import os
 import sys
 
@@ -42,46 +43,41 @@ def test_a_machine_with_no_solver_is_told_what_to_install(monkeypatch):
     with pytest.raises(ccx.SolverMissing) as raised:
         ccx.find_ccx()
     message = str(raised.value)
-    # The three ways to get one, and the way out for a machine that has it
-    # somewhere else. A message that only says "not found" sends the reader to a
-    # search engine.
+    # First what explains it -- the image this package declares carries `ccx`,
+    # so a runtime without one is not that image. Then, for somebody running
+    # these scripts by hand, the three ways to get a native solver and the way
+    # out for a machine that keeps it somewhere else. A message that only says
+    # "not found" sends the reader to a search engine.
+    assert "container:" in message
     assert "calculix-ccx" in message
     assert "conda" in message
     assert ccx.CCX_ENV in message
 
 
-def test_arm_linux_is_told_that_gmsh_has_no_wheel_for_it(monkeypatch):
-    """The one platform where the mesher cannot be installed at all.
+@pytest.mark.parametrize(
+    "system, machine",
+    [("Linux", "aarch64"), ("Linux", "x86_64"), ("Darwin", "arm64"), ("Windows", "AMD64")],
+)
+def test_a_runtime_without_gmsh_says_it_is_not_the_declared_image(monkeypatch, system, machine):
+    """A missing mesher is a statement about the runtime, on every platform.
 
-    gmsh ships four wheels per release and none of them is linux aarch64, and it
-    ships no sdist either, so `partcad.yaml` carries a marker telling pip not to
-    try. What is left is a sandbox with no gmsh in it, and the reader has to be
-    told that this is the platform rather than something they forgot to install.
+    64-bit ARM Linux used to be a case of its own: gmsh publishes no wheel for
+    it and no sdist, so a Python sandbox there could not have one. The image
+    `partcad.yaml` declares carries gmsh for that architecture too, so there is
+    no longer a platform to blame -- what is left, everywhere alike, is that
+    this is not running in that image.
     """
-    monkeypatch.setattr(ccx.platform, "machine", lambda: "aarch64")
-    monkeypatch.setattr(ccx.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(ccx.platform, "machine", lambda: machine)
+    monkeypatch.setattr(ccx.platform, "system", lambda: system)
     monkeypatch.setitem(sys.modules, "gmsh", None)  # 'import gmsh' -> ImportError
 
     with pytest.raises(ccx.SolverMissing) as raised:
         ccx._gmsh()
     message = str(raised.value)
-    assert "ARM" in message
-    assert "x86_64" in message
-
-
-def test_a_sandbox_without_gmsh_elsewhere_says_only_that(monkeypatch):
-    """Everywhere else a missing gmsh is a broken sandbox, not a platform gap.
-
-    Saying "no wheel for this platform" on a machine that has one would send the
-    reader looking for a problem that is not there.
-    """
-    monkeypatch.setattr(ccx.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(ccx.platform, "system", lambda: "Linux")
-    monkeypatch.setitem(sys.modules, "gmsh", None)
-
-    with pytest.raises(ccx.SolverMissing) as raised:
-        ccx._gmsh()
-    assert "ARM" not in str(raised.value)
+    # What is missing, where, and the one thing that explains it.
+    assert "gmsh" in message
+    assert machine in message and system in message
+    assert "container:" in message
 
 
 def test_the_environment_variable_wins(monkeypatch, tmp_path):
@@ -577,24 +573,63 @@ def test_the_declared_parameters_are_all_numbers(module_name):
     config = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), "partcad.yaml")))
     analysis = module_name.split("_")[0]
     for name, value in config["cae"][analysis].items():
-        if name in ("desc", "path", "extension"):
+        # PartCAD's own keys, which describe the file type rather than parametrise
+        # the analysis: they never reach the script (see `IMPLEMENTATION_KEYS` in
+        # `partcad/output.py`) and none of them is a number.
+        if name in ("desc", "path", "extension", "package", "container", "pythonRequirements", "pythonVersion", "decode"):
             continue
         assert isinstance(value, (int, float)), "%s: %r is not a number" % (name, value)
 
 
-def test_the_package_declares_what_the_scripts_import():
-    """A requirement that is imported and not declared is one the sandbox lacks."""
+# What the image these analyses run in is built to carry, and proves it carries
+# before it is published -- see `tools/containers/calculix/verify.py` in the
+# `partcad` repository, which imports each of these and meshes and solves with
+# them at build time. Written down here because this package declares no
+# `pythonRequirements`: nothing installs what the scripts import, so what makes
+# an import safe is that the image has it, and a new import is a change to the
+# image rather than a line of YAML.
+IMAGE_CARRIES = ("gmsh", "numpy", "trimesh")
+
+
+def test_every_file_type_declares_the_image_it_runs_in():
+    """The `container:` is the whole of this package's dependency handling.
+
+    `ccx` is a native executable and gmsh has no wheel for 64-bit ARM Linux, so a
+    Python sandbox cannot be made to hold this pipeline -- the image is what
+    lets the package promise to work rather than hope to. It is declared on each
+    file type because that is where PartCAD reads it: unlike `pythonVersion`,
+    a `container:` has no package-level fallback, and one written above `cae:`
+    is silently ignored.
+    """
     import yaml
 
+    config = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), "partcad.yaml")))
+    assert "pythonRequirements" not in config, "the image carries these; a list here is inert"
+    for name, file_type in config["cae"].items():
+        container = file_type.get("container")
+        assert container, "%s declares no container" % name
+        # The short form is the image and nothing else; the long one is a
+        # mapping. PartCAD accepts both, so this reads both.
+        image = container if isinstance(container, str) else container.get("image")
+        assert image, "%s declares a container with no image" % name
+        # An immutable tag. A floating one would let the image and the code
+        # expecting it drift apart with nothing to point at afterwards.
+        assert ":" in image.rsplit("/", 1)[-1], "%s pins no tag: %s" % (name, image)
+        assert not image.endswith((":latest", ":main", ":devel")), "%s pins a moving tag: %s" % (name, image)
+
+
+def test_the_scripts_import_only_what_the_image_carries():
+    """An import nothing installs is one that has to already be there."""
     here = os.path.dirname(__file__)
-    config = yaml.safe_load(open(os.path.join(here, "partcad.yaml")))
-    declared = " ".join(config["pythonRequirements"])
     source = "".join(
         open(os.path.join(here, name)).read() for name in ("calculix_common.py", "fea_calculix.py", "cfd_calculix.py")
     )
-    for module in ("gmsh", "numpy", "trimesh"):
-        if "import %s" % module in source:
-            assert module in declared, "%s is imported but not declared" % module
+    imported = set(re.findall(r"^\s*import (\w+)", source, re.MULTILINE))
+    imported |= set(re.findall(r"^\s*from (\w+) import", source, re.MULTILINE))
+    # The standard library, and the sibling module these scripts share.
+    stdlib = set(sys.stdlib_module_names) | {"calculix_common"}
+    for module in sorted(imported - stdlib):
+        assert module in IMAGE_CARRIES, "%s is imported but the image is not known to carry it" % module
 
 
 def test_every_declared_file_type_has_its_script_on_disk():

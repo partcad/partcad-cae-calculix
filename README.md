@@ -4,10 +4,11 @@ The [CalculiX](https://www.calculix.de/) implementations of PartCAD's two engine
 `pc cae fea` and `pc cae cfd` run by default.
 
 This is a [PartCAD](https://partcad.org/) package, not a Python distribution. Nothing here is installed by
-hand: PartCAD fetches the package as a dependency and installs the Python requirements below into the sandbox
-it runs the implementations in. It is reached from the public index as `//pub/feature/cae/calculix`, and the
-`caeFeaImplementation` / `caeCfdImplementation` user configuration options point at
-`//pub/feature/cae/calculix:fea` and `:cfd` out of the box.
+hand, and nothing here asks you to install a solver: PartCAD fetches the package as a dependency and runs both
+analyses inside the container image they declare, which carries CalculiX and everything else they need. It is
+reached from the public index as `//pub/feature/cae/calculix`, and the `caeFeaImplementation` /
+`caeCfdImplementation` user configuration options point at `//pub/feature/cae/calculix:fea` and `:cfd` out of
+the box. What it does need is a container runtime — see [What it needs](#what-it-needs).
 
 ## Status: `fea` works, `cfd` does not yet
 
@@ -17,7 +18,9 @@ Say this before anything else, because the two are not in the same state.
 [`examples/feature_cae`](https://github.com/partcad/partcad/tree/devel/examples/feature_cae) cantilever — 100 x
 10 x 10 mm of steel, clamped at one end, 100 N at the other — comes back at **0.1655 mm**, inside the
 0.16-0.18 mm the port-neighbourhood model predicts, and stable from 434 to 6468 elements. Peak von Mises
-58.3 MPa against a bending figure of 60.0 MPa. Run with CalculiX 2.23 on macOS arm64.
+58.3 MPa against a bending figure of 60.0 MPa. Run with CalculiX 2.23 on macOS arm64 — a native solver, which
+is what was to hand at the time; the image these analyses now declare carries Debian's build of `ccx` instead,
+and nobody has re-run the cantilever through it to confirm the numbers land in the same place.
 
 **`cfd` does not produce a usable answer, and it is now clear why.** Three things were wrong with it. Two are
 fixed:
@@ -95,8 +98,8 @@ turned and zoomed like any other 3D object. The findings are listed under it.
 ## What it is
 
 Two file types in a `cae:` section, which is the same shape as an `export:` or a `render:` one — `path` names
-the script, `pythonRequirements` describes its sandbox, `extension` says what it writes, and everything else
-is a parameter handed to the script:
+the script, `container:` (or, for an implementation pip can provision, `pythonRequirements`) says where it
+runs, `extension` says what it writes, and everything else is a parameter handed to the script:
 
 | File type | What it does | Writes |
 | --- | --- | --- |
@@ -120,6 +123,9 @@ cae:
     yield_strength: 2.4e+8
     mesh_size: 0.02
 ```
+
+`container:` is not repeated there and must not be: where the implementation runs is read from the package that
+ships it, which `package:` names, so a re-tuned copy inherits the image along with the script.
 
 ### The pipeline
 
@@ -172,10 +178,54 @@ one that has no answer.
 
 ## What it needs
 
-`gmsh`, `numpy` and `trimesh` are `pythonRequirements` and PartCAD installs them into the sandbox itself.
+**A container runtime, and nothing else.** Both analyses declare an image and run inside it:
 
-**`ccx` is not one of them.** It is a native executable, pip cannot install it, and PartCAD does not ship
-solvers. Install it the way the platform does:
+    ghcr.io/partcad/partcad-container-calculix
+
+It carries `ccx`, gmsh, numpy, trimesh and OpenCASCADE — the solver, the mesher, and the binding that rebuilds
+PartCAD's geometry before the first line of these scripts runs. Nothing on the host is consulted, so there is
+nothing to install, nothing to put on `PATH`, and no version of anything to match.
+
+The image is built and published from
+[`tools/containers/calculix/`](https://github.com/partcad/partcad/tree/devel/tools/containers/calculix) in the
+`partcad` repository, for `linux/amd64` and `linux/arm64` alike, and it proves itself at build time: `verify.py`
+there decodes a shape with OpenCASCADE, meshes it with gmsh and solves a deck with `ccx`, and a build where any
+of that fails produces no image.
+
+`container:` is declared on each of the two file types in `partcad.yaml`, pinned to a tag that is a hash of what
+the image is built from rather than a version. The pin is immutable, so it keeps working when the image is next
+edited, and the image and the code expecting it cannot drift apart silently.
+
+### The cost, and what it rules out
+
+An implementation that declares a `container:` has said a sandbox is not enough, and PartCAD takes it at its
+word: there is no falling back to a machine that happens to have `ccx` installed natively. A machine with no
+container runtime therefore cannot run these analyses at all.
+
+That is the trade, and it is deliberate: it leaves exactly one thing that can stop them, and it is a thing
+PartCAD can detect and say plainly. A missing container runtime is the one absence `pc test` passes over.
+Everything else — a solver that will not converge, a mesh that will not build, an image that is not what it
+claims — is this package failing, and is reported as a failure.
+
+### Why not a Python sandbox
+
+Because a Python sandbox cannot hold this pipeline, twice over:
+
+* **`ccx` is a native executable.** pip has never heard of it, and PartCAD does not ship solvers.
+* **gmsh publishes no wheel for 64-bit ARM Linux, and no source distribution** — four wheels per release
+  (macOS x86_64, macOS arm64, manylinux x86_64, win_amd64), in every release from 4.12 through 4.15. On an ARM
+  Linux runner or an ARM container there is nothing for pip to install and nothing to build from.
+
+Debian builds both, for amd64 and arm64 alike, which is what the image is made of. A plugin that answered "not
+on this machine" to a user who thought their machine was equipped would have failed; on 64-bit ARM Linux it
+would have failed however carefully its `pythonRequirements` were written. So this package declares none —
+there is nothing for PartCAD to install, and nothing that can fail to install.
+
+### Running the scripts by hand
+
+Outside PartCAD — a contributor debugging `calculix_common.py` at a prompt — there is no image, and what it
+carries has to come from somewhere. `ccx` is looked up on `PATH` and then in the usual places, and
+`PARTCAD_CCX` names it outright on a machine where it lives somewhere else:
 
 ```shell
 apt install calculix-ccx                     # Debian, Ubuntu
@@ -183,26 +233,8 @@ brew install calculix-ccx                    # macOS
 conda install -c conda-forge calculix        # anywhere conda is
 ```
 
-It is looked up on `PATH` and then in the usual places; `PARTCAD_CCX` names it outright on a machine where it
-lives somewhere else. A machine with no solver is told so as a sentence saying what to install — that is a
-finding about the machine, not about the part.
-
-### Platforms: not 64-bit ARM Linux
-
-`gmsh` publishes four wheels per release — macOS x86_64, macOS arm64, manylinux x86_64 and win_amd64 — and
-**no linux aarch64 wheel and no source distribution**, in every release from 4.12 through 4.15. So on 64-bit
-ARM Linux there is nothing for pip to install and nothing to build from, and no version of this package can
-change that.
-
-`pythonRequirements` therefore carries `; platform_machine != "aarch64"` on `gmsh`, which is not a preference
-but the difference between two failures. Asked for it anyway, pip exits non-zero, PartCAD logs that as an
-error, and a logged error makes `pc` exit non-zero even where the caller recovered — so `pc test` reports the
-failure of a package that is perfectly well formed. Told not to try, pip skips it and exits clean, the sandbox
-builds, and the analysis reports "not on this machine" through the same path a missing `ccx` uses: a warning,
-and the check passes over the part.
-
-Apple silicon is unaffected — macOS reports `arm64`, and gmsh publishes that wheel. This is 64-bit ARM
-**Linux** alone, which in practice means an ARM CI runner or an ARM container.
+That is a convenience for that case, not a second supported way to run the analyses. When one of them says the
+solver or the mesher is missing, it says so as what it is: not the image, rather than not this machine.
 
 ## Tests
 
@@ -210,28 +242,14 @@ Apple silicon is unaffected — macOS reports `arm64`, and gmsh publishes that w
 pytest test_calculix.py          # needs numpy and pyyaml; no solver, no gmsh
 ```
 
-`ccx` is a native executable and `gmsh` is a large wheel, so a contributor may have neither — which rules out
-an end-to-end run and does *not* rule out the parts most likely to be quietly wrong. What is covered is the
-`.frd` reader (fixed-column parsing, including the case where two negative values fill their fields and touch,
-which is what rules out splitting the line on whitespace), `von_mises` against its closed form,
-`surface_triangles` finding exactly the faces one element owns, the port-to-node-set mapping, the deck
-writer's 16-per-line node sets, and that a machine with no solver is told what to install.
+An end-to-end run needs the image, so this suite deliberately does not attempt one — which does *not* rule out
+the parts most likely to be quietly wrong. What is covered is the `.frd` reader (fixed-column parsing,
+including the case where two negative values fill their fields and touch, which is what rules out splitting the
+line on whitespace), `von_mises` against its closed form, `surface_triangles` finding exactly the faces one
+element owns, the port-to-node-set mapping, the deck writer's 16-per-line node sets, that a runtime without the
+solver or the mesher says which one and what would explain it, and that both file types declare the image and
+pin it to something immutable.
 
 That suite has already earned itself: the `.frd` reader's column offsets were wrong on the first draft — every
 field came back empty, which looks exactly like a solver that did not converge — and the offsets are now
 written down in `calculix_common.py` beside the Fortran formats they come from.
-
-## Status
-
-**Not yet validated end to end against a real solver.** The pipeline is written against CalculiX 2.20+ and
-gmsh 4.x, and it has not been run: the machine it was written on has neither. What the tests above cover is
-sound; what they cannot reach is whether `ccx` accepts the decks, whether the boundary conditions land where a
-person would put them, and whether the numbers are right. Treat those with suspicion until somebody has
-checked one against a case with a known answer — a cantilever beam under a tip load is the usual one, and its
-closed form is in every strength-of-materials text.
-
-Corrections welcome, and a checked case most of all.
-
-## Licence
-
-Apache License 2.0. See [LICENSE.txt](./LICENSE.txt).
