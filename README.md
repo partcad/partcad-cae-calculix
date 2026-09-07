@@ -144,6 +144,23 @@ It is looked up on `PATH` and then in the usual places; `PARTCAD_CCX` names it o
 lives somewhere else. A machine with no solver is told so as a sentence saying what to install — that is a
 finding about the machine, not about the part.
 
+### Platforms: not 64-bit ARM Linux
+
+`gmsh` publishes four wheels per release — macOS x86_64, macOS arm64, manylinux x86_64 and win_amd64 — and
+**no linux aarch64 wheel and no source distribution**, in every release from 4.12 through 4.15. So on 64-bit
+ARM Linux there is nothing for pip to install and nothing to build from, and no version of this package can
+change that.
+
+`pythonRequirements` therefore carries `; platform_machine != "aarch64"` on `gmsh`, which is not a preference
+but the difference between two failures. Asked for it anyway, pip exits non-zero, PartCAD logs that as an
+error, and a logged error makes `pc` exit non-zero even where the caller recovered — so `pc test` reports the
+failure of a package that is perfectly well formed. Told not to try, pip skips it and exits clean, the sandbox
+builds, and the analysis reports "not on this machine" through the same path a missing `ccx` uses: a warning,
+and the check passes over the part.
+
+Apple silicon is unaffected — macOS reports `arm64`, and gmsh publishes that wheel. This is 64-bit ARM
+**Linux** alone, which in practice means an ARM CI runner or an ARM container.
+
 ## Tests
 
 ```shell

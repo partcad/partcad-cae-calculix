@@ -26,6 +26,7 @@ the machine rather than about the part.
 
 import math
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -52,6 +53,32 @@ class SolverMissing(Exception):
 
 class SolverFailed(Exception):
     """CalculiX ran and did not produce a result, with what it said."""
+
+
+def _gmsh():
+    """The gmsh module, or raise saying why this machine does not have one.
+
+    A platform gap rather than something the user forgot to install, on exactly
+    one platform: gmsh publishes four wheels per release -- macOS x86_64, macOS
+    arm64, manylinux x86_64 and win_amd64 -- and **no** linux aarch64 wheel and
+    no sdist, in every release from 4.12 to 4.15. So there is nothing pip can
+    install on 64-bit ARM Linux, and `partcad.yaml` tells it not to try.
+
+    Reported as `SolverMissing` for the same reason a missing `ccx` is: it is a
+    statement about this machine, not about the part, so `pc test` warns and
+    moves on rather than failing a package that is perfectly well formed.
+    """
+    try:
+        import gmsh
+    except ImportError as e:
+        if platform.machine() in ("aarch64", "arm64") and platform.system() == "Linux":
+            raise SolverMissing(
+                "gmsh publishes no wheel for 64-bit ARM Linux and no source distribution, so this "
+                "analysis cannot run on this machine. Use an x86_64 machine, or build gmsh's Python "
+                "module yourself and put it on the sandbox's path."
+            ) from e
+        raise SolverMissing("gmsh is not installed in this sandbox: %s" % e) from e
+    return gmsh
 
 
 def find_ccx():
@@ -160,8 +187,9 @@ def mesh_shape(shape, size_fraction, order):
     in memory: gmsh's OCC kernel is its own build of OpenCASCADE, and two
     OpenCASCADE libraries in one process is how a segfault happens.
     """
-    import gmsh
     import numpy as np
+
+    gmsh = _gmsh()
 
     with tempfile.TemporaryDirectory() as work:
         step = os.path.join(work, "shape.step")

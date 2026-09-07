@@ -36,8 +36,20 @@ desc: |
 #
 # `ccx` itself is NOT here. It is a native executable rather than a Python
 # package, and pip cannot install it -- see README.md for how to get one.
+#
+# The marker on `gmsh` is a platform gap, not a preference. gmsh publishes four
+# wheels per release -- macOS x86_64, macOS arm64, manylinux x86_64 and
+# win_amd64 -- and no linux aarch64 wheel and no sdist, in every release from
+# 4.12 to 4.15. On 64-bit ARM Linux there is therefore nothing for pip to
+# install, and asking anyway is not harmless: pip exits non-zero, PartCAD logs
+# that as an error, and an error latches the flag that makes `pc` exit non-zero
+# even where the caller recovered -- so `pc test` reports the failure of a
+# package that is perfectly well formed. Told not to try, pip skips it and exits
+# clean, the sandbox builds, and the analysis then reports "not on this machine"
+# through the same path a missing `ccx` uses. See `_gmsh()` in
+# `calculix_common.py` and "Platforms" in README.md.
 pythonRequirements:
-  - gmsh==4.15.0
+  - gmsh==4.15.0; platform_machine != "aarch64"
   - numpy==2.4.1
   - trimesh==4.9.0
 

@@ -22,6 +22,7 @@ Run it with `pytest test_calculix.py`. It needs `numpy` and nothing else.
 """
 
 import os
+import sys
 
 import numpy as np
 import pytest
@@ -47,6 +48,40 @@ def test_a_machine_with_no_solver_is_told_what_to_install(monkeypatch):
     assert "calculix-ccx" in message
     assert "conda" in message
     assert ccx.CCX_ENV in message
+
+
+def test_arm_linux_is_told_that_gmsh_has_no_wheel_for_it(monkeypatch):
+    """The one platform where the mesher cannot be installed at all.
+
+    gmsh ships four wheels per release and none of them is linux aarch64, and it
+    ships no sdist either, so `partcad.yaml` carries a marker telling pip not to
+    try. What is left is a sandbox with no gmsh in it, and the reader has to be
+    told that this is the platform rather than something they forgot to install.
+    """
+    monkeypatch.setattr(ccx.platform, "machine", lambda: "aarch64")
+    monkeypatch.setattr(ccx.platform, "system", lambda: "Linux")
+    monkeypatch.setitem(sys.modules, "gmsh", None)  # 'import gmsh' -> ImportError
+
+    with pytest.raises(ccx.SolverMissing) as raised:
+        ccx._gmsh()
+    message = str(raised.value)
+    assert "ARM" in message
+    assert "x86_64" in message
+
+
+def test_a_sandbox_without_gmsh_elsewhere_says_only_that(monkeypatch):
+    """Everywhere else a missing gmsh is a broken sandbox, not a platform gap.
+
+    Saying "no wheel for this platform" on a machine that has one would send the
+    reader looking for a problem that is not there.
+    """
+    monkeypatch.setattr(ccx.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(ccx.platform, "system", lambda: "Linux")
+    monkeypatch.setitem(sys.modules, "gmsh", None)
+
+    with pytest.raises(ccx.SolverMissing) as raised:
+        ccx._gmsh()
+    assert "ARM" not in str(raised.value)
 
 
 def test_the_environment_variable_wins(monkeypatch, tmp_path):
