@@ -4,11 +4,11 @@ The [CalculiX](https://www.calculix.de/) implementations of PartCAD's two engine
 `pc cae fea` and `pc cae cfd` run by default.
 
 This is a [PartCAD](https://partcad.org/) package, not a Python distribution. Nothing here is installed by
-hand, and nothing here asks you to install a solver: PartCAD fetches the package as a dependency and runs both
-analyses inside the container image they declare, which carries CalculiX and everything else they need. It is
-reached from the public index as `//pub/feature/cae/calculix`, and the `caeFeaImplementation` /
-`caeCfdImplementation` user configuration options point at `//pub/feature/cae/calculix:fea` and `:cfd` out of
-the box. What it does need is a container runtime — see [What it needs](#what-it-needs).
+hand: PartCAD fetches the package as a dependency and runs both analyses in the best sandbox this machine can
+give them — a container carrying the solver where there is a container runtime, and a conda or venv sandbox
+otherwise. It is reached from the public index as `//pub/feature/cae/calculix`, and the `caeFeaImplementation`
+/ `caeCfdImplementation` user configuration options point at `//pub/feature/cae/calculix:fea` and `:cfd` out
+of the box. See [What it needs](#what-it-needs) for what each of those asks of you.
 
 ## Status: `fea` works, `cfd` does not yet
 
@@ -98,8 +98,8 @@ turned and zoomed like any other 3D object. The findings are listed under it.
 ## What it is
 
 Two file types in a `cae:` section, which is the same shape as an `export:` or a `render:` one — `path` names
-the script, `container:` (or, for an implementation pip can provision, `pythonRequirements`) says where it
-runs, `extension` says what it writes, and everything else is a parameter handed to the script:
+the script, `pythonRequirements` and `dockerImage` say what it needs and where it runs best, `extension` says
+what it writes, and everything else is a parameter handed to the script:
 
 | File type | What it does | Writes |
 | --- | --- | --- |
@@ -124,8 +124,8 @@ cae:
     mesh_size: 0.02
 ```
 
-`container:` is not repeated there and must not be: where the implementation runs is read from the package that
-ships it, which `package:` names, so a re-tuned copy inherits the image along with the script.
+`dockerImage:` is not repeated there and must not be: where the implementation runs is read from the package
+that ships it, which `package:` names, so a re-tuned copy inherits the image along with the script.
 
 ### The pipeline
 
@@ -178,54 +178,20 @@ one that has no answer.
 
 ## What it needs
 
-**A container runtime, and nothing else.** Both analyses declare an image and run inside it:
+**Either a container runtime, or the solver and the mesher installed here.** Both work, and which one you use
+is your machine's business rather than this package's.
 
-    ghcr.io/partcad/partcad-container-calculix
+With a container runtime, PartCAD builds the sandbox from the image these analyses name:
 
-It carries `ccx`, gmsh, numpy, trimesh and OpenCASCADE — the solver, the mesher, and the binding that rebuilds
-PartCAD's geometry before the first line of these scripts runs. Nothing on the host is consulted, so there is
-nothing to install, nothing to put on `PATH`, and no version of anything to match.
+    ghcr.io/partcad/partcad-cae-calculix
 
-The image is built and published from
-[`tools/containers/calculix/`](https://github.com/partcad/partcad/tree/devel/tools/containers/calculix) in the
-`partcad` repository, for `linux/amd64` and `linux/arm64` alike, and it proves itself at build time: `verify.py`
-there decodes a shape with OpenCASCADE, meshes it with gmsh and solves a deck with `ccx`, and a build where any
-of that fails produces no image.
+It carries `ccx` and gmsh on top of PartCAD's own Python base image, so nothing has to be installed and no
+version of anything has to be matched. Built here — see `Dockerfile` and `.github/workflows/image.yml` — for
+`amd64` and `arm64` alike, and it proves itself at build time: `verify_image.py` meshes a box and runs the
+solver, and a build where either fails publishes no image.
 
-`container:` is declared on each of the two file types in `partcad.yaml`, pinned to a tag that is a hash of what
-the image is built from rather than a version. The pin is immutable, so it keeps working when the image is next
-edited, and the image and the code expecting it cannot drift apart silently.
-
-### The cost, and what it rules out
-
-An implementation that declares a `container:` has said a sandbox is not enough, and PartCAD takes it at its
-word: there is no falling back to a machine that happens to have `ccx` installed natively. A machine with no
-container runtime therefore cannot run these analyses at all.
-
-That is the trade, and it is deliberate: it leaves exactly one thing that can stop them, and it is a thing
-PartCAD can detect and say plainly. A missing container runtime is the one absence `pc test` passes over.
-Everything else — a solver that will not converge, a mesh that will not build, an image that is not what it
-claims — is this package failing, and is reported as a failure.
-
-### Why not a Python sandbox
-
-Because a Python sandbox cannot hold this pipeline, twice over:
-
-* **`ccx` is a native executable.** pip has never heard of it, and PartCAD does not ship solvers.
-* **gmsh publishes no wheel for 64-bit ARM Linux, and no source distribution** — four wheels per release
-  (macOS x86_64, macOS arm64, manylinux x86_64, win_amd64), in every release from 4.12 through 4.15. On an ARM
-  Linux runner or an ARM container there is nothing for pip to install and nothing to build from.
-
-Debian builds both, for amd64 and arm64 alike, which is what the image is made of. A plugin that answered "not
-on this machine" to a user who thought their machine was equipped would have failed; on 64-bit ARM Linux it
-would have failed however carefully its `pythonRequirements` were written. So this package declares none —
-there is nothing for PartCAD to install, and nothing that can fail to install.
-
-### Running the scripts by hand
-
-Outside PartCAD — a contributor debugging `calculix_common.py` at a prompt — there is no image, and what it
-carries has to come from somewhere. `ccx` is looked up on `PATH` and then in the usual places, and
-`PARTCAD_CCX` names it outright on a machine where it lives somewhere else:
+Without one, the analyses run in a conda or venv sandbox like any other package. PartCAD installs the
+`pythonRequirements` from `partcad.yaml`, and the native half has to be on the host:
 
 ```shell
 apt install calculix-ccx                     # Debian, Ubuntu
@@ -233,8 +199,46 @@ brew install calculix-ccx                    # macOS
 conda install -c conda-forge calculix        # anywhere conda is
 ```
 
-That is a convenience for that case, not a second supported way to run the analyses. When one of them says the
-solver or the mesher is missing, it says so as what it is: not the image, rather than not this machine.
+`ccx` is looked up on `PATH` and then in the usual places; `PARTCAD_CCX` names it outright on a machine where
+it lives somewhere else.
+
+### Why both, rather than just the image
+
+Because an image says where a package runs *best*, not where it runs at all. A workstation with the
+distribution packages already installed, a CI runner whose job installed them, a machine where Docker is not
+permitted — all of those are perfectly good places to run a stress analysis, and a package that insisted on a
+container would be refusing them for its own convenience.
+
+The reverse is why the image exists. A Python sandbox cannot hold this pipeline unaided, twice over:
+
+* **`ccx` is a native executable.** pip has never heard of it, and PartCAD does not ship solvers.
+* **gmsh publishes no wheel for 64-bit ARM Linux, and no source distribution** — four wheels per release
+  (macOS x86_64, macOS arm64, manylinux x86_64, win_amd64), in every release from 4.12 through 4.15. On an ARM
+  Linux machine pip has nothing to install and nothing to build from, which is why `pythonRequirements` carries
+  `; platform_machine != "aarch64"` on gmsh: told to try, pip fails the install rather than the analysis.
+
+Debian builds both for amd64 and arm64, and that is what the image is made of. So on 64-bit ARM Linux the
+image, or `apt install python3-gmsh`, is the answer — and everywhere else pip is.
+
+### What is missing is said with both remedies
+
+When the solver or the mesher is not there, the sentence names both ways to get it, because the message cannot
+tell which kind of machine it is talking to and naming one would send half its readers to the wrong one. That
+sentence is what `pc cae` prints and what `pc test` fails with; PartCAD adds which implementation was asked and
+which machine it did not work on.
+
+Not running is **not** a skip. A part that declares `fea:` has asked a question, and this package answering
+nothing has failed — which is the point of declaring the section at all.
+
+### The pin
+
+`dockerImage:` is declared on each of the two file types, pinned to a tag that is a hash of what the image is
+built from rather than a version. The pin is immutable, so it keeps working when the image is next edited and
+the image cannot drift away from the code expecting it. `./image-tag.sh` says what to pin after changing the
+`Dockerfile`, and the workflow refuses to build when `partcad.yaml` and the script disagree.
+
+The architecture is not written into the pin: PartCAD appends it before pulling and falls back to the bare
+name, so one line covers both.
 
 ## Tests
 

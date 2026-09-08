@@ -48,17 +48,22 @@ MM_PER_M = 1000.0
 
 
 class SolverMissing(Exception):
-    """Something this analysis needs is not in the runtime it is running in.
+    """Something this analysis needs is not where it is running.
 
-    Which, since `partcad.yaml` declares an image that carries all of it, means
-    the analysis is not running in that image. The sentence says which component
-    is missing, on what machine, and what would explain it. PartCAD reports it
-    verbatim as the reason the analysis failed, so it is the whole of what a user
-    gets; "not installed" without a remedy sends them to a search engine.
+    There are two ways to have it, so the sentence names both. `partcad.yaml`
+    declares an image carrying the solver and the mesher, which is what a
+    machine with a container runtime gets; a machine without one runs these
+    scripts in a conda or venv sandbox, where the Python half is installed from
+    `pythonRequirements` and the native half has to be on the host already.
 
-    It is a failure like any other. The only absence these analyses are excused
-    for is a machine with no container runtime at all, and that one is PartCAD's
-    to detect -- it never reaches this code.
+    PartCAD reports whatever this says verbatim as the reason the analysis
+    failed, so it is the whole of what a user gets. "Not installed" without a
+    remedy sends them to a search engine; a remedy that names only one of the
+    two sends half of them to the wrong one.
+
+    It is a failure. Not running is not excused any more -- a part that declares
+    `fea:` has asked a question, and this package answering nothing has failed
+    whatever the reason.
     """
 
 
@@ -67,26 +72,30 @@ class SolverFailed(Exception):
 
 
 def _gmsh():
-    """The gmsh module, or raise saying why this runtime does not have one.
+    """The gmsh module, or raise saying both ways to get one.
 
-    This was once a platform gap. gmsh publishes four wheels per release --
-    macOS x86_64, macOS arm64, manylinux x86_64 and win_amd64 -- and no linux
-    aarch64 wheel and no sdist, in every release from 4.12 to 4.15, so a Python
-    sandbox on 64-bit ARM Linux could not have gmsh however carefully it was
-    provisioned. The `container:` in `partcad.yaml` is what closed it: Debian
+    There is a platform gap underneath this. gmsh publishes four wheels per
+    release -- macOS x86_64, macOS arm64, manylinux x86_64 and win_amd64 -- and
+    no linux aarch64 wheel and no source distribution, in every release from
+    4.12 to 4.15, so pip cannot supply it on 64-bit ARM Linux however carefully
+    the requirements are written. That is what `dockerImage:` closes: Debian
     builds gmsh for arm64, and the image takes it from there.
 
-    So reaching this now says the analysis is not running in that image, which
-    is a statement about the runtime and not about the part.
+    It closes it only for a machine that can run a container, though, which is
+    why the marker on `gmsh` in `pythonRequirements` is not a contradiction:
+    everywhere pip *can* supply it, it does, and on the one platform where it
+    cannot the image or a distribution package is the answer.
     """
     try:
         import gmsh
     except ImportError as e:
         raise SolverMissing(
-            "gmsh is not in this analysis's runtime on this %s-%s machine. The image this package "
-            "declares carries it -- see `container:` in partcad.yaml -- so this is not running in "
-            "that image: either the declaration was overridden, or these scripts are being run "
-            "outside PartCAD. Underlying error: %s" % (platform.system(), platform.machine(), e)
+            "gmsh is not importable on this %s-%s machine. Two ways to have it: run with a "
+            "container runtime available, which gets the image named by `dockerImage:` in "
+            "partcad.yaml and carries gmsh for every architecture -- or install it here, which pip "
+            "can do everywhere except 64-bit ARM Linux, where gmsh publishes no wheel and no source "
+            "distribution and the distribution package (`python3-gmsh`) is the only way. "
+            "Underlying error: %s" % (platform.system(), platform.machine(), e)
         ) from e
     return gmsh
 
@@ -110,11 +119,10 @@ def find_ccx():
                 return candidate
 
     raise SolverMissing(
-        "the CalculiX solver (ccx) is not in this analysis's runtime on this %s machine. The image "
-        "this package declares carries it -- see `container:` in partcad.yaml -- so this is not "
-        "running in that image: either the declaration was overridden, or these scripts are being "
-        "run outside PartCAD. Run by hand they need a native solver, which pip cannot install: "
-        "'apt install calculix-ccx', 'brew install calculix-ccx' or "
+        "the CalculiX solver (ccx) is not available on this %s machine. Two ways to have it: run "
+        "with a container runtime available, which gets the image named by `dockerImage:` in "
+        "partcad.yaml and carries the solver -- or install it here, which pip cannot do because it "
+        "is a native executable: 'apt install calculix-ccx', 'brew install calculix-ccx' or "
         "'conda install -c conda-forge calculix', or point %s at the executable. "
         "Searched: %s on PATH, then %s"
         % (

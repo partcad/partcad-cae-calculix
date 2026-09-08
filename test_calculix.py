@@ -43,12 +43,13 @@ def test_a_machine_with_no_solver_is_told_what_to_install(monkeypatch):
     with pytest.raises(ccx.SolverMissing) as raised:
         ccx.find_ccx()
     message = str(raised.value)
-    # First what explains it -- the image this package declares carries `ccx`,
-    # so a runtime without one is not that image. Then, for somebody running
-    # these scripts by hand, the three ways to get a native solver and the way
-    # out for a machine that keeps it somewhere else. A message that only says
-    # "not found" sends the reader to a search engine.
-    assert "container:" in message
+    # Both ways to have it, because a reader with a container runtime and a
+    # reader without one need different answers and the message cannot tell
+    # which it is talking to. Then the three ways to install a native solver,
+    # and the way out for a machine that keeps one somewhere else. A message
+    # that only says "not found" sends the reader to a search engine; one that
+    # names a single remedy sends half of them to the wrong one.
+    assert "dockerImage:" in message
     assert "calculix-ccx" in message
     assert "conda" in message
     assert ccx.CCX_ENV in message
@@ -58,14 +59,14 @@ def test_a_machine_with_no_solver_is_told_what_to_install(monkeypatch):
     "system, machine",
     [("Linux", "aarch64"), ("Linux", "x86_64"), ("Darwin", "arm64"), ("Windows", "AMD64")],
 )
-def test_a_runtime_without_gmsh_says_it_is_not_the_declared_image(monkeypatch, system, machine):
-    """A missing mesher is a statement about the runtime, on every platform.
+def test_a_runtime_without_gmsh_names_both_ways_to_get_one(monkeypatch, system, machine):
+    """A missing mesher has two remedies, and the message cannot tell which applies.
 
-    64-bit ARM Linux used to be a case of its own: gmsh publishes no wheel for
-    it and no sdist, so a Python sandbox there could not have one. The image
-    `partcad.yaml` declares carries gmsh for that architecture too, so there is
-    no longer a platform to blame -- what is left, everywhere alike, is that
-    this is not running in that image.
+    64-bit ARM Linux is the case that shapes it: gmsh publishes no wheel there
+    and no source distribution, so pip cannot supply it however the requirements
+    are written, and the image or a distribution package is the answer.
+    Everywhere else pip can, which is why the message names installing it too
+    rather than telling every reader to start Docker.
     """
     monkeypatch.setattr(ccx.platform, "machine", lambda: machine)
     monkeypatch.setattr(ccx.platform, "system", lambda: system)
@@ -74,10 +75,11 @@ def test_a_runtime_without_gmsh_says_it_is_not_the_declared_image(monkeypatch, s
     with pytest.raises(ccx.SolverMissing) as raised:
         ccx._gmsh()
     message = str(raised.value)
-    # What is missing, where, and the one thing that explains it.
+    # What is missing, where, and both ways out.
     assert "gmsh" in message
     assert machine in message and system in message
-    assert "container:" in message
+    assert "dockerImage:" in message
+    assert "install" in message
 
 
 def test_the_environment_variable_wins(monkeypatch, tmp_path):
@@ -576,60 +578,89 @@ def test_the_declared_parameters_are_all_numbers(module_name):
         # PartCAD's own keys, which describe the file type rather than parametrise
         # the analysis: they never reach the script (see `IMPLEMENTATION_KEYS` in
         # `partcad/output.py`) and none of them is a number.
-        if name in ("desc", "path", "extension", "package", "container", "pythonRequirements", "pythonVersion", "decode"):
+        if name in (
+            "desc",
+            "path",
+            "extension",
+            "package",
+            "dockerImage",
+            "container",
+            "pythonRequirements",
+            "pythonVersion",
+            "decode",
+        ):
             continue
         assert isinstance(value, (int, float)), "%s: %r is not a number" % (name, value)
 
 
-# What the image these analyses run in is built to carry, and proves it carries
-# before it is published -- see `tools/containers/calculix/verify.py` in the
-# `partcad` repository, which imports each of these and meshes and solves with
-# them at build time. Written down here because this package declares no
-# `pythonRequirements`: nothing installs what the scripts import, so what makes
-# an import safe is that the image has it, and a new import is a change to the
-# image rather than a line of YAML.
-IMAGE_CARRIES = ("gmsh", "numpy", "trimesh")
+# What both scripts import beyond the standard library. Declared in
+# `partcad.yaml` as `pythonRequirements` *and* carried by the image, which is
+# the contract rather than a duplication: the image says where these run best,
+# the requirements say how they run at all.
+IMPORTS = ("gmsh", "numpy", "trimesh")
 
 
-def test_every_file_type_declares_the_image_it_runs_in():
-    """The `container:` is the whole of this package's dependency handling.
+def test_every_file_type_names_the_image_it_runs_best_in():
+    """`dockerImage` is a preference, and the pin has to be one that cannot move.
 
-    `ccx` is a native executable and gmsh has no wheel for 64-bit ARM Linux, so a
-    Python sandbox cannot be made to hold this pipeline -- the image is what
-    lets the package promise to work rather than hope to. It is declared on each
-    file type because that is where PartCAD reads it: unlike `pythonVersion`,
-    a `container:` has no package-level fallback, and one written above `cae:`
-    is silently ignored.
+    `ccx` is a native executable and gmsh publishes no wheel for 64-bit ARM
+    Linux, so the image is what lets this package work on a machine with
+    nothing installed. It is not what lets it work at all -- that is the
+    requirements below -- which is why a machine using conda or venv ignores
+    this line entirely.
     """
     import yaml
 
     config = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), "partcad.yaml")))
-    assert "pythonRequirements" not in config, "the image carries these; a list here is inert"
     for name, file_type in config["cae"].items():
-        container = file_type.get("container")
-        assert container, "%s declares no container" % name
-        # The short form is the image and nothing else; the long one is a
-        # mapping. PartCAD accepts both, so this reads both.
-        image = container if isinstance(container, str) else container.get("image")
-        assert image, "%s declares a container with no image" % name
-        # An immutable tag. A floating one would let the image and the code
+        image = file_type.get("dockerImage")
+        assert image, "%s names no image" % name
+        # An immutable tag. A moving one would let the image and the code
         # expecting it drift apart with nothing to point at afterwards.
         assert ":" in image.rsplit("/", 1)[-1], "%s pins no tag: %s" % (name, image)
         assert not image.endswith((":latest", ":main", ":devel")), "%s pins a moving tag: %s" % (name, image)
+        # No architecture. PartCAD appends one and falls back to the bare name,
+        # so writing it here would pin the package to one machine.
+        assert not image.endswith(("-amd64", "-arm64")), "%s pins one architecture: %s" % (name, image)
 
 
-def test_the_scripts_import_only_what_the_image_carries():
-    """An import nothing installs is one that has to already be there."""
+def test_the_pin_is_the_tag_this_repository_builds():
+    """Two files name it, and a pin nobody published fails at the first analysis."""
+    import subprocess
+
+    import yaml
+
     here = os.path.dirname(__file__)
+    built = subprocess.run([os.path.join(here, "image-tag.sh")], capture_output=True, text=True, check=True)
+    config = yaml.safe_load(open(os.path.join(here, "partcad.yaml")))
+    for name, file_type in config["cae"].items():
+        assert file_type["dockerImage"].rsplit(":", 1)[1] == built.stdout.strip(), (
+            "%s pins a tag this repository does not build; run ./image-tag.sh" % name
+        )
+
+
+def test_the_scripts_declare_everything_they_import():
+    """An import nothing installs is one that only works inside the image.
+
+    Which is the failure this contract exists to prevent: a package that runs
+    for whoever has Docker and fails for everyone else, without saying so.
+    """
+    here = os.path.dirname(__file__)
+    import yaml
+
+    config = yaml.safe_load(open(os.path.join(here, "partcad.yaml")))
+    declared = " ".join(config["pythonRequirements"])
+
     source = "".join(
         open(os.path.join(here, name)).read() for name in ("calculix_common.py", "fea_calculix.py", "cfd_calculix.py")
     )
     imported = set(re.findall(r"^\s*import (\w+)", source, re.MULTILINE))
     imported |= set(re.findall(r"^\s*from (\w+) import", source, re.MULTILINE))
-    # The standard library, and the sibling module these scripts share.
     stdlib = set(sys.stdlib_module_names) | {"calculix_common"}
+
     for module in sorted(imported - stdlib):
-        assert module in IMAGE_CARRIES, "%s is imported but the image is not known to carry it" % module
+        assert module in IMPORTS, "%s is imported but is not one of this package's dependencies" % module
+        assert module in declared, "%s is imported but not declared in pythonRequirements" % module
 
 
 def test_every_declared_file_type_has_its_script_on_disk():

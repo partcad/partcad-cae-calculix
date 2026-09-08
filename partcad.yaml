@@ -30,49 +30,55 @@ desc: |
   holds it and what it carries; this package meshes it, hands the mesh to
   CalculiX, and reports back a coloured result model and a list of findings.
 
-# There is no `pythonRequirements:` here, and that is the point of the block
-# below. Everything both scripts import -- gmsh, numpy, trimesh, and the
-# OpenCASCADE binding the sandbox decodes its input with -- is inside the image
-# they run in, so there is nothing for PartCAD to install and nothing that can
-# fail to install. A list here would be inert as well as misleading: an
-# implementation that declares a `container:` is never handed a Python sandbox
-# to provision (see `Shape._run_implementation_locked` in the `partcad` repo).
-
-# Where the analyses actually run, and the reason this package can promise to
-# work rather than hope to.
+# What both scripts import. Declared for the package rather than repeated on each
+# file type, because it is the same pipeline underneath both of them: mesh with
+# gmsh, write a CalculiX deck, run `ccx`, read the `.frd`, write a glTF.
 #
-# A Python sandbox can bring whatever pip can install, and that is not enough
-# here twice over: `ccx` is a native executable pip has never heard of, and gmsh
-# publishes no wheel for 64-bit ARM Linux and no sdist. A plugin that answers
-# "the analysis did not run" on a machine the user thought was equipped has
-# failed, and on those platforms it would have failed however carefully it was
-# written. So it brings its own: the image carries `ccx`, gmsh, numpy and
-# trimesh, and OpenCASCADE besides -- that last one not for the analysis but so
-# the sandbox can read its own input, since PartCAD sends geometry as a
-# serialized BREP that is rebuilt before the first line here runs.
+# These are here even though the image below carries them, and that is the
+# contract rather than a belt-and-braces. `dockerImage` says where these
+# analyses run *best*; it does not say where they run at all. A host that
+# already has `ccx` and gmsh -- a workstation with the distribution packages
+# installed, a CI runner whose job installed them -- runs this package in a
+# conda or venv sandbox like any other, and only a package that declares both
+# works in either.
+#
+# `ccx` itself is not here and cannot be: it is a native executable rather than
+# a Python package. That is what the image is for.
+pythonRequirements:
+  - gmsh; platform_machine != "aarch64"
+  - numpy
+  - trimesh
+
+# Where these analyses run best, and the reason this package can promise to work
+# on a machine that has nothing installed.
+#
+# A Python sandbox can bring whatever pip can install, which is not enough here
+# twice over: `ccx` is a native executable pip has never heard of, and gmsh
+# publishes no wheel for 64-bit ARM Linux and no source distribution. So the
+# image carries `ccx`, gmsh, numpy and trimesh, and OpenCASCADE besides -- that
+# last one not for the analysis but so the sandbox can read its own input, since
+# PartCAD sends geometry as a serialized BREP that is rebuilt before the first
+# line here runs.
+#
+# The marker on `gmsh` above is that same platform gap seen from the other side:
+# on 64-bit ARM Linux *without* the image there is nothing for pip to install,
+# and asking anyway fails the install rather than the analysis.
 #
 # The tag is a hash of what the image is built from rather than a version. It is
 # immutable, so this pin keeps working when the image is next edited, and an
-# image and the code expecting it cannot drift apart silently. See
-# `tools/containers/calculix/` in partcad/partcad, and `image-tag.sh` there for
-# what to pin after changing it.
+# image and the code expecting it cannot drift apart silently. PartCAD appends
+# the machine's architecture before pulling, so one line here covers both. See
+# `.github/workflows/image.yml` and `image-tag.sh`.
 #
-# Declared on each file type because that is where PartCAD reads it: unlike
-# `pythonVersion`, a `container:` has no package-level fallback, and one written
-# above `cae:` is silently ignored.
-#
-# The cost is a container runtime, and it is unconditional -- an implementation
-# that declares one has said a sandbox is not enough, so there is no falling
-# back to a machine that happens to have `ccx` installed natively. That is the
-# trade: it leaves "no container runtime here" as the only thing that can stop
-# these analyses, which is what makes it the one absence `pc test` may pass over
-# instead of failing the part.
+# Declared on each file type because that is where PartCAD reads it first; a
+# package-level `dockerImage` would work too, and is written here instead only
+# so that a reader of either file type sees which image it runs in.
 cae:
   fea:
     desc: A linear static stress analysis, as a coloured glTF plus findings.
     path: fea_calculix.py
     extension: glb
-    container: ghcr.io/partcad/partcad-container-calculix:d6d15d6922b0
+    dockerImage: ghcr.io/partcad/partcad-cae-calculix:a86a36c3287e
 
     # Every field below is a parameter of this implementation, handed to the
     # script as it stands. A package re-tunes any of them in a `cae:` section of
@@ -130,7 +136,7 @@ cae:
     desc: An incompressible flow analysis of the part as a fluid volume.
     path: cfd_calculix.py
     extension: glb
-    container: ghcr.io/partcad/partcad-container-calculix:d6d15d6922b0
+    dockerImage: ghcr.io/partcad/partcad-cae-calculix:a86a36c3287e
 
     # See `fea` above for the meshing parameters.
     mesh_size: 0.05
