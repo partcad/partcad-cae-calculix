@@ -96,7 +96,11 @@ def _gmsh():
             "container runtime available, which gets the image named by `dockerImage:` in "
             "partcad.yaml and carries gmsh for every architecture -- or install it here, which pip "
             "can do everywhere except 64-bit ARM Linux, where gmsh publishes no wheel and no source "
-            "distribution and the distribution package (`python3-gmsh`) is the only way. "
+            "distribution, so it has to come from somewhere that is not pip -- `python3-gmsh` or "
+            "conda-forge, both of which build it for arm64. A distribution package installs into the "
+            "system interpreter rather than into the sandbox this is running in, so it also has to be "
+            "reachable from here: put the `gmsh.py` it installs on PYTHONPATH, or build the sandbox "
+            "with the system site-packages visible. "
             "Underlying error: %s" % (platform.system(), platform.machine(), e)
         ) from e
     return gmsh
@@ -124,8 +128,9 @@ def find_ccx():
         "the CalculiX solver (ccx) is not available on this %s machine. Two ways to have it: run "
         "with a container runtime available, which gets the image named by `dockerImage:` in "
         "partcad.yaml and carries the solver -- or install it here, which pip cannot do because it "
-        "is a native executable: 'apt install calculix-ccx', 'brew install brewsci/science/calculix-ccx' or "
-        "'conda install -c conda-forge calculix', or point %s at the executable. "
+        "is a native executable: 'conda install -c conda-forge calculix' anywhere conda is, "
+        "'apt install calculix-ccx' on Ubuntu -- Debian 13 has no such package -- "
+        "'brew install brewsci/science/calculix-ccx' on macOS, or point %s at the executable. "
         "Searched: %s on PATH, then %s"
         % (
             platform.system(),
