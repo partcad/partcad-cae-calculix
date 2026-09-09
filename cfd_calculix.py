@@ -283,19 +283,28 @@ def _deck(mesh, wall_sets, driven_sets, outlet_sets, request, radius_fraction):
     # hundred pascals sits under a field initialised at one atmosphere, so the
     # deck says the fluid is being sucked backwards out of the inlet as hard as
     # the atmosphere can push, and the answer is a dead field.
-    # A node cannot be both. Written into the deck twice it carries two
-    # degree-8 constraints in one step -- 'pressure_reference + rise' and
-    # 'pressure_reference' -- and which one CalculiX keeps is not something the
-    # deck says. Two ports that overlap is a model somebody has to fix, so say
-    # which ones rather than solving an arbitrary one of the two readings.
-    for inlet_name, inlet_nodes, _record in driven_sets:
-        for outlet_name, outlet_nodes, _outlet_record in outlet_sets:
-            shared = set(inlet_nodes) & set(outlet_nodes)
+    # One node, one pressure. Written into the deck twice it carries two
+    # degree-8 constraints in one step, and CalculiX's rule for that is to keep
+    # the later one -- so the model that gets solved would be decided by the
+    # order the ports happen to be listed in, which is not something the model
+    # says. Two ports that overlap is a model somebody has to fix, so say which
+    # ones rather than solving an arbitrary one of the readings.
+    #
+    # Every pair that could write a *different* pressure, which is two of the
+    # three kinds of pair: a driven port against another driven port carries a
+    # rise each, and a driven port against an outlet carries a rise and the
+    # reference. Two outlets are not a pair -- both write the reference, so the
+    # deck says the same thing whichever one CalculiX keeps.
+    pressure_sets = [(name, nodes) for name, nodes, _record in driven_sets]
+    outlet_pairs = [(name, nodes) for name, nodes, _record in outlet_sets]
+    for index, (name, nodes) in enumerate(pressure_sets):
+        for other_name, other_nodes in pressure_sets[index + 1 :] + outlet_pairs:
+            shared = set(nodes) & set(other_nodes)
             if shared:
                 raise ccx.SolverFailed(
-                    "ports '%s' and '%s' select %d of the same mesh nodes, so the deck would give those "
-                    "nodes an inlet pressure and an outlet pressure at once. Move the ports apart, or "
-                    "narrow them with a smaller radius." % (inlet_name, outlet_name, len(shared))
+                    "ports '%s' and '%s' select %d of the same mesh nodes, so the deck would constrain "
+                    "those nodes to two pressures at once. Move the ports apart, or narrow them with a "
+                    "smaller radius." % (name, other_name, len(shared))
                 )
 
     area = math.pi * (mesh.extent * float(radius_fraction) / ccx.MM_PER_M) ** 2

@@ -120,7 +120,20 @@ jobs:
             echo "::group::${ARCH}"
             TAGS="--tag ${IMAGE}:latest-${ARCH}"
             if [ "${PIN_MOVES}" = "true" ]; then
-              TAGS="--tag ${IMAGE}:${TAG}-${ARCH} ${TAGS}"
+              # A content tag is only immutable if nothing republishes it, and
+              # excusing the nightly run is not enough. A push to main that
+              # leaves the Dockerfile alone -- a README edit, a test, this
+              # workflow -- computes the tag that is already published, and
+              # would overwrite it with an image built from a base that has
+              # moved since. So a tag that is already out there is left as it
+              # is. The build still runs, because a base image that breaks this
+              # plugin has to fail here; it is only the tag that is withheld,
+              # and `latest-<arch>` still moves.
+              if docker buildx imagetools inspect "${IMAGE}:${TAG}-${ARCH}" >/dev/null 2>&1; then
+                echo "${IMAGE}:${TAG}-${ARCH} is published already; building it, not republishing it."
+              else
+                TAGS="--tag ${IMAGE}:${TAG}-${ARCH} ${TAGS}"
+              fi
             fi
             docker buildx build \
               --platform "linux/${ARCH}" \

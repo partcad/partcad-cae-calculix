@@ -239,7 +239,10 @@ nothing has failed — which is the point of declaring the section at all.
 `dockerImage:` is declared on each of the two file types, pinned to a tag that is a hash of what the image is
 built from rather than a version. The pin is immutable, so it keeps working when the image is next edited and
 the image cannot drift away from the code expecting it. `./image-tag.sh` says what to pin after changing the
-`Dockerfile`, and the workflow refuses to build when `partcad.yaml` and the script disagree.
+`Dockerfile`, and the workflow refuses to build when `partcad.yaml` and the script disagree. Immutable is
+enforced rather than asserted: a build whose tag is already published leaves it alone and moves only
+`latest-<arch>`, so neither the nightly rebuild nor a push that leaves the `Dockerfile` alone can replace an
+image somebody has pinned.
 
 The architecture is not written into the pin: PartCAD appends it before pulling and falls back to the bare
 name, so one line covers both.

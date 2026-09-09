@@ -346,6 +346,41 @@ def test_a_port_cannot_be_both_an_inlet_and_an_outlet():
         cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
 
 
+def test_two_driven_ports_cannot_share_nodes_either():
+    """Two inlets overlapping is the same fault as an inlet over an outlet.
+
+    Both write a degree-8 pressure of their own, so a shared node carries two
+    of them and CalculiX keeps whichever came last -- which makes the answer a
+    function of the order the ports were listed in.
+    """
+    import cfd_calculix
+
+    mesh = _one_tetrahedron()
+    driven = [("INLET_A", [1, 2], {"load": 1.0}), ("INLET_B", [2, 3], {"load": 5.0})]
+    outlet = [("OUTLET", [4], {})]
+
+    with pytest.raises(ccx.SolverFailed, match="INLET_A.*INLET_B"):
+        cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
+
+
+def test_two_outlets_may_share_nodes():
+    """Because both of them write the reference pressure, and nothing else.
+
+    The check is about a node the deck constrains twice to two *different*
+    values; two outlets constrain it twice to the same one, which the deck says
+    unambiguously however CalculiX resolves it.
+    """
+    import cfd_calculix
+
+    mesh = _one_tetrahedron()
+    driven = [("INLET", [1], {"load": 1.0})]
+    outlet = [("OUT_A", [2, 3], {}), ("OUT_B", [3, 4], {})]
+
+    lines = cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
+    assert any(line.startswith("OUT_A, 8, 8,") for line in lines)
+    assert any(line.startswith("OUT_B, 8, 8,") for line in lines)
+
+
 def test_ports_that_share_no_nodes_still_write_a_deck():
     """The check is about overlap, not about having two ports."""
     import cfd_calculix
