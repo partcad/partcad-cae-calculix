@@ -329,6 +329,36 @@ def test_the_deck_is_written_in_metres():
     assert "*ELEMENT, TYPE=C3D4, ELSET=EALL" in lines
 
 
+def test_a_port_cannot_be_both_an_inlet_and_an_outlet():
+    """The same node written twice carries two degree-8 pressures in one step.
+
+    Which one CalculiX keeps is not something the deck says, so the deck is not
+    written at all: two ports selecting the same nodes is a model to fix, and
+    the message names which two.
+    """
+    import cfd_calculix
+
+    mesh = _one_tetrahedron()
+    driven = [("INLET", [1, 2, 3], {"load": 1.0})]
+    outlet = [("OUTLET", [3, 4], {})]
+
+    with pytest.raises(ccx.SolverFailed, match="INLET.*OUTLET"):
+        cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
+
+
+def test_ports_that_share_no_nodes_still_write_a_deck():
+    """The check is about overlap, not about having two ports."""
+    import cfd_calculix
+
+    mesh = _one_tetrahedron()
+    driven = [("INLET", [1, 2], {"load": 1.0})]
+    outlet = [("OUTLET", [3, 4], {})]
+
+    lines = cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
+    assert any(line.startswith("INLET, 8, 8,") for line in lines)
+    assert any(line.startswith("OUTLET, 8, 8,") for line in lines)
+
+
 def test_a_node_set_wraps_at_sixteen_entries():
     """CalculiX's own limit. A 17th entry on one line is a parse error there."""
     lines = ccx.deck_nset("PORT0", list(range(1, 40)))

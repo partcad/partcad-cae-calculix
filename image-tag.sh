@@ -14,4 +14,21 @@
 set -eu
 
 cd "$(dirname "$0")"
-cat Dockerfile verify_image.py | sha256sum | cut -c1-12
+
+# The Python version is an input as much as the Dockerfile is: it decides which
+# base image this is built on, and two images built for two versions are not the
+# same image however identical the Dockerfile was.
+PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
+
+# sha256sum on Linux, shasum on macOS, which does not ship the former -- and the
+# test suite that runs this documents macOS.
+if command -v sha256sum >/dev/null 2>&1; then
+    SUM="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    SUM="shasum -a 256"
+else
+    echo "image-tag.sh needs sha256sum or shasum" >&2
+    exit 1
+fi
+
+{ echo "python ${PYTHON_VERSION}"; cat Dockerfile verify_image.py; } | ${SUM} | cut -c1-12

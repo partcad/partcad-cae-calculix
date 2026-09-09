@@ -122,7 +122,7 @@ def find_ccx():
         "the CalculiX solver (ccx) is not available on this %s machine. Two ways to have it: run "
         "with a container runtime available, which gets the image named by `dockerImage:` in "
         "partcad.yaml and carries the solver -- or install it here, which pip cannot do because it "
-        "is a native executable: 'apt install calculix-ccx', 'brew install calculix-ccx' or "
+        "is a native executable: 'apt install calculix-ccx', 'brew install brewsci/science/calculix-ccx' or "
         "'conda install -c conda-forge calculix', or point %s at the executable. "
         "Searched: %s on PATH, then %s"
         % (

@@ -195,7 +195,7 @@ Without one, the analyses run in a conda or venv sandbox like any other package.
 
 ```shell
 apt install calculix-ccx                     # Debian, Ubuntu
-brew install calculix-ccx                    # macOS
+brew install brewsci/science/calculix-ccx    # macOS (the formula is in the BrewSci tap)
 conda install -c conda-forge calculix        # anywhere conda is
 ```
 

@@ -43,6 +43,8 @@ jobs:
 
       - name: The tag this is published under
         id: tag
+        env:
+          PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
         run: echo "TAG=$(./image-tag.sh)" >> "${GITHUB_OUTPUT}"
 
       # A pin that does not match what this build produces is a package naming
@@ -52,13 +54,28 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.TAG }}
         run: |
-          PINNED=$(grep -o 'dockerImage: [^ ]*' partcad.yaml | head -1 | cut -d: -f3)
-          if [ "${PINNED}" != "${TAG}" ]; then
-            echo "partcad.yaml pins '${PINNED}' but this builds '${TAG}'." >&2
-            echo "Run ./image-tag.sh and update both 'dockerImage:' lines." >&2
+          # Every pin, not the first one: this file names an image per file
+          # type, and checking only 'fea' let a stale 'cfd' pin through -- which
+          # is a package naming an image nobody published, discovered at the
+          # first analysis rather than here.
+          FOUND=0
+          FAILED=0
+          for PINNED in $(grep -o 'dockerImage: [^ ]*' partcad.yaml | sed 's/.*://'); do
+            FOUND=$((FOUND + 1))
+            if [ "${PINNED}" != "${TAG}" ]; then
+              echo "partcad.yaml pins '${PINNED}' but this builds '${TAG}'." >&2
+              FAILED=1
+            fi
+          done
+          if [ "${FOUND}" -eq 0 ]; then
+            echo "partcad.yaml names no image at all; this workflow builds one nothing asks for." >&2
             exit 1
           fi
-          echo "partcad.yaml and the build agree on ${TAG}."
+          if [ "${FAILED}" -ne 0 ]; then
+            echo "Run ./image-tag.sh and update every 'dockerImage:' line." >&2
+            exit 1
+          fi
+          echo "partcad.yaml and the build agree on ${TAG}, across ${FOUND} declaration(s)."
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -88,19 +105,28 @@ jobs:
       # A pull request builds without pushing: the build is the test -- the
       # Dockerfile runs the base image's contract check and this package's own,
       # so an image that cannot mesh or solve fails here.
+      # The nightly run publishes only the moving tag. Its whole purpose is to
+      # rebuild against a base image that has moved, so what it produces is by
+      # definition not what the content tag names -- and a content tag that can
+      # be republished is not immutable, whatever the comment in `image-tag.sh`
+      # says. A `dockerImage:` pin has to keep meaning what it meant.
       - name: Build
         env:
           TAG: ${{ steps.tag.outputs.TAG }}
           PUSH: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
+          PIN_MOVES: ${{ github.event_name != 'schedule' && 'true' || 'false' }}
         run: |
           for ARCH in amd64 arm64; do
             echo "::group::${ARCH}"
+            TAGS="--tag ${IMAGE}:latest-${ARCH}"
+            if [ "${PIN_MOVES}" = "true" ]; then
+              TAGS="--tag ${IMAGE}:${TAG}-${ARCH} ${TAGS}"
+            fi
             docker buildx build \
               --platform "linux/${ARCH}" \
               --build-arg "PYTHON_VERSION=${PYTHON_VERSION}" \
               --build-arg "ARCH=${ARCH}" \
-              --tag "${IMAGE}:${TAG}-${ARCH}" \
-              --tag "${IMAGE}:latest-${ARCH}" \
+              ${TAGS} \
               --cache-from "type=registry,ref=${IMAGE}:latest-${ARCH}" \
               --cache-to type=inline \
               --output "type=image,push=${PUSH}" \

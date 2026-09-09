@@ -283,6 +283,21 @@ def _deck(mesh, wall_sets, driven_sets, outlet_sets, request, radius_fraction):
     # hundred pascals sits under a field initialised at one atmosphere, so the
     # deck says the fluid is being sucked backwards out of the inlet as hard as
     # the atmosphere can push, and the answer is a dead field.
+    # A node cannot be both. Written into the deck twice it carries two
+    # degree-8 constraints in one step -- 'pressure_reference + rise' and
+    # 'pressure_reference' -- and which one CalculiX keeps is not something the
+    # deck says. Two ports that overlap is a model somebody has to fix, so say
+    # which ones rather than solving an arbitrary one of the two readings.
+    for inlet_name, inlet_nodes, _record in driven_sets:
+        for outlet_name, outlet_nodes, _outlet_record in outlet_sets:
+            shared = set(inlet_nodes) & set(outlet_nodes)
+            if shared:
+                raise ccx.SolverFailed(
+                    "ports '%s' and '%s' select %d of the same mesh nodes, so the deck would give those "
+                    "nodes an inlet pressure and an outlet pressure at once. Move the ports apart, or "
+                    "narrow them with a smaller radius." % (inlet_name, outlet_name, len(shared))
+                )
+
     area = math.pi * (mesh.extent * float(radius_fraction) / ccx.MM_PER_M) ** 2
     for name, _nodes, record in driven_sets:
         rise = float(record["load"]) / max(area, 1e-12)
