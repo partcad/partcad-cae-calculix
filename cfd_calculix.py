@@ -146,6 +146,12 @@ def _analyse(path, request):
 
 
 def _verdict(peak_speed, pressure_drop, request):
+    """What the numbers mean, as findings.
+
+    The thresholds are parameters of the file type, the same way `fea`'s are, so
+    a package that knows what its own channel is for says so once in its `cae:`
+    section instead of arguing with a default on every part.
+    """
     findings = []
 
     limit = request.get("max_velocity")
