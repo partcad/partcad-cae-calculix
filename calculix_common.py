@@ -99,8 +99,8 @@ def _gmsh():
             "distribution, so it has to come from somewhere that is not pip -- `python3-gmsh` or "
             "conda-forge, both of which build it for arm64. A distribution package installs into the "
             "system interpreter rather than into the sandbox this is running in, so it also has to be "
-            "reachable from here: put the `gmsh.py` it installs on PYTHONPATH, or build the sandbox "
-            "with the system site-packages visible. "
+            "reachable from here: point PYTHONPATH at the directory holding the `gmsh.py` it installs, "
+            "or build the sandbox with the system site-packages visible. "
             "Underlying error: %s" % (platform.system(), platform.machine(), e)
         ) from e
     return gmsh

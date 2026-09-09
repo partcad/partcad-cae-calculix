@@ -29,6 +29,10 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/partcad/partcad-cae-calculix
+  # What the Dockerfile builds `FROM`, named here as well because the build
+  # below uses it as a registry that must answer. The two have to agree; the
+  # Dockerfile is the one that decides.
+  BASE_IMAGE: ghcr.io/partcad/partcad-container-python
   # The interpreter these analyses run on, and so which base image to build on.
   # PartCAD's own default; this package declares no `pythonVersion`, so a
   # different value here would produce an image nothing asks for.
@@ -129,10 +133,26 @@ jobs:
               # is. The build still runs, because a base image that breaks this
               # plugin has to fail here; it is only the tag that is withheld,
               # and `latest-<arch>` still moves.
+              #
+              # `imagetools inspect` says "no" the same way whether the tag is
+              # absent or the registry never answered, and those two must not
+              # mean the same thing here: reading a 401 as "not published"
+              # republishes the tag this is trying to protect. Rather than
+              # matching on the wording of an error, the second inspect is a
+              # control that must succeed -- the base image, which exists
+              # whenever this build can work at all, in the same registry
+              # through the same login. If even that cannot be seen, the
+              # registry is not answering and "absent" is not a conclusion this
+              # build is entitled to draw, so it stops.
               if docker buildx imagetools inspect "${IMAGE}:${TAG}-${ARCH}" >/dev/null 2>&1; then
                 echo "${IMAGE}:${TAG}-${ARCH} is published already; building it, not republishing it."
-              else
+              elif docker buildx imagetools inspect "${BASE_IMAGE}:py${PYTHON_VERSION}-${ARCH}" >/dev/null 2>&1; then
                 TAGS="--tag ${IMAGE}:${TAG}-${ARCH} ${TAGS}"
+              else
+                echo "Neither ${IMAGE}:${TAG}-${ARCH} nor ${BASE_IMAGE}:py${PYTHON_VERSION}-${ARCH} could be" >&2
+                echo "read from the registry, so whether the tag is published is not something this build" >&2
+                echo "knows. Refusing to publish it rather than overwriting what somebody has pinned." >&2
+                exit 1
               fi
             fi
             docker buildx build \

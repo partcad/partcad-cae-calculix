@@ -704,6 +704,31 @@ def test_the_pin_is_the_tag_this_repository_builds():
         )
 
 
+def test_the_workflow_and_the_dockerfile_name_one_base_image():
+    """The build reads the base image as a control, so it has to be the same one.
+
+    Before it decides a content tag is unpublished, the workflow inspects the
+    base image to prove the registry answered at all -- which only distinguishes
+    "absent" from "unreachable" if that is the image this actually builds
+    `FROM`. Two files naming it is two chances for one to move; the Dockerfile
+    is the one that decides.
+    """
+    import re
+
+    here = os.path.dirname(__file__)
+    dockerfile = open(os.path.join(here, "Dockerfile")).read()
+    workflow = open(os.path.join(here, ".github", "workflows", "image.yml")).read()
+
+    built_from = re.search(r"^FROM\s+(\S+?):", dockerfile, re.MULTILINE)
+    assert built_from, "the Dockerfile names no base image"
+    inspected = re.search(r"^\s*BASE_IMAGE:\s*(\S+)\s*$", workflow, re.MULTILINE)
+    assert inspected, "the workflow names no BASE_IMAGE"
+
+    assert built_from.group(1) == inspected.group(1), (
+        "the Dockerfile builds FROM %s but the workflow probes %s" % (built_from.group(1), inspected.group(1))
+    )
+
+
 def test_the_scripts_declare_everything_they_import():
     """An import nothing installs is one that only works inside the image.
 

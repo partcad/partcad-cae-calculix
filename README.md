@@ -215,10 +215,12 @@ The reverse is why the image exists. A Python sandbox cannot hold this pipeline 
 * **gmsh publishes no wheel for 64-bit ARM Linux, and no source distribution** — four wheels per release
   (macOS x86_64, macOS arm64, manylinux x86_64, win_amd64), in every release from 4.12 through 4.15. On an ARM
   Linux machine pip has nothing to install and nothing to build from, which is why `pythonRequirements` carries
-  `; platform_machine != "aarch64"` on gmsh: told to try, pip fails the install rather than the analysis. A
-  distribution package fills that gap but installs into the system interpreter rather than into the sandbox, so
-  outside the image it has to be pointed at — `PYTHONPATH` at the `gmsh.py` it installs, or a sandbox built with
-  the system site-packages visible. Inside the image that is what the `cp` into `/opt/pc-site` is for.
+  `; platform_machine != "aarch64"` on gmsh. The marker is false there, so pip leaves gmsh alone instead of
+  failing the whole install over a wheel that does not exist. A distribution package fills that gap but installs
+  into the system interpreter rather than into the sandbox, so outside the image it has to be pointed at —
+  `PYTHONPATH` at the directory holding that `gmsh.py`, since a path entry is a directory and not a file, or a
+  sandbox built with the system site-packages visible. Inside the image that is what the `cp` into
+  `/opt/pc-site` is for.
 
 Debian builds gmsh for amd64 and arm64 alike, and that is where the image gets its mesher. So on 64-bit ARM
 Linux the image, or `apt install python3-gmsh`, is the answer — and everywhere else pip is.
