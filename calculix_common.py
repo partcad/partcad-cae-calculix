@@ -32,9 +32,11 @@ import subprocess
 import tempfile
 
 # Where to look for the solver, after PATH. The names the distributions use:
-# Debian and Ubuntu ship `ccx` in `calculix-ccx`, Homebrew and the CalculiX
-# binaries from calculix.de use `ccx_<version>`, and conda-forge uses `ccx`.
-CCX_NAMES = ("ccx", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_static")
+# Ubuntu ships `ccx` in `calculix-ccx` and Debian did until 13 dropped the
+# package, Homebrew and the CalculiX binaries from calculix.de use
+# `ccx_<version>`, and conda-forge -- which is where this package's image gets
+# its solver -- uses `ccx`.
+CCX_NAMES = ("ccx", "ccx_2.23", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_static")
 CCX_DIRECTORIES = ("/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/CalculiX/bin")
 
 # The environment variable that overrides all of that, for a machine where the

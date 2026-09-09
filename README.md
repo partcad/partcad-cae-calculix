@@ -19,8 +19,8 @@ Say this before anything else, because the two are not in the same state.
 10 x 10 mm of steel, clamped at one end, 100 N at the other — comes back at **0.1655 mm**, inside the
 0.16-0.18 mm the port-neighbourhood model predicts, and stable from 434 to 6468 elements. Peak von Mises
 58.3 MPa against a bending figure of 60.0 MPa. Run with CalculiX 2.23 on macOS arm64 — a native solver, which
-is what was to hand at the time; the image these analyses now declare carries Debian's build of `ccx` instead,
-and nobody has re-run the cantilever through it to confirm the numbers land in the same place.
+is what was to hand at the time; the image these analyses now declare carries conda-forge's build of that same
+version, and nobody has re-run the cantilever through it to confirm the numbers land in the same place.
 
 **`cfd` does not produce a usable answer, and it is now clear why.** Three things were wrong with it. Two are
 fixed:
@@ -194,9 +194,9 @@ Without one, the analyses run in a conda or venv sandbox like any other package.
 `pythonRequirements` from `partcad.yaml`, and the native half has to be on the host:
 
 ```shell
-apt install calculix-ccx                     # Debian, Ubuntu
+apt install calculix-ccx                     # Ubuntu (Debian 13 has no such package)
 brew install brewsci/science/calculix-ccx    # macOS (the formula is in the BrewSci tap)
-conda install -c conda-forge calculix        # anywhere conda is
+conda install -c conda-forge calculix        # anywhere conda is, and what the image uses
 ```
 
 `ccx` is looked up on `PATH` and then in the usual places; `PARTCAD_CCX` names it outright on a machine where
@@ -217,8 +217,12 @@ The reverse is why the image exists. A Python sandbox cannot hold this pipeline 
   Linux machine pip has nothing to install and nothing to build from, which is why `pythonRequirements` carries
   `; platform_machine != "aarch64"` on gmsh: told to try, pip fails the install rather than the analysis.
 
-Debian builds both for amd64 and arm64, and that is what the image is made of. So on 64-bit ARM Linux the
-image, or `apt install python3-gmsh`, is the answer — and everywhere else pip is.
+Debian builds gmsh for amd64 and arm64 alike, and that is where the image gets its mesher. So on 64-bit ARM
+Linux the image, or `apt install python3-gmsh`, is the answer — and everywhere else pip is.
+
+The solver the image takes from conda-forge, which builds `ccx` for both architectures, into a prefix of its
+own. It used to come from Debian as well, until Debian 13 dropped `calculix-ccx`: apt there offers no
+installation candidate for it, and the only name left matching `calculix` is the documentation package.
 
 ### What is missing is said with both remedies
 

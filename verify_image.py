@@ -11,10 +11,11 @@ image's own `verify.py` checks the contract PartCAD talks to a container
 through; this checks the two things this image adds on top of it, and checks
 them the way the analyses will use them.
 
-That last part is the point. Both additions come from Debian packages built for
-Debian's interpreter, while the interpreter here is python.org's -- so "the
-package installed" proves nothing, and what has to be proved is that *this*
-interpreter can import the mesher and *this* PATH can find the solver.
+That last part is the point. Neither addition is installed where this
+interpreter would look by default: the mesher is a Debian package built for
+Debian's interpreter, and the solver lives in a conda-forge prefix of its own.
+So "the package installed" proves nothing, and what has to be proved is that
+*this* interpreter can import the mesher and *this* PATH can find the solver.
 """
 
 import shutil

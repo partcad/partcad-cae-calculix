@@ -78,7 +78,7 @@ cae:
     desc: A linear static stress analysis, as a coloured glTF plus findings.
     path: fea_calculix.py
     extension: glb
-    dockerImage: ghcr.io/partcad/partcad-cae-calculix:c90fc4e2c215
+    dockerImage: ghcr.io/partcad/partcad-cae-calculix:410ecb34824b
 
     # Every field below is a parameter of this implementation, handed to the
     # script as it stands. A package re-tunes any of them in a `cae:` section of
@@ -136,7 +136,7 @@ cae:
     desc: An incompressible flow analysis of the part as a fluid volume.
     path: cfd_calculix.py
     extension: glb
-    dockerImage: ghcr.io/partcad/partcad-cae-calculix:c90fc4e2c215
+    dockerImage: ghcr.io/partcad/partcad-cae-calculix:410ecb34824b
 
     # See `fea` above for the meshing parameters.
     mesh_size: 0.05
