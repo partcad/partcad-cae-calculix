@@ -25,14 +25,32 @@ LABEL org.opencontainers.image.source="https://github.com/partcad/partcad-cae-ca
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-# `calculix-ccx` is the solver. `python3-gmsh` and `libgmsh4` are the mesher:
-# Debian builds them for amd64 and arm64 alike, which is the whole reason this
-# image exists on ARM.
+# `calculix-ccx` is the solver and `python3-gmsh` is the mesher. Debian builds
+# both for amd64 and arm64 alike, which is the whole reason this image exists
+# on ARM.
+#
+# The gmsh shared library is deliberately not named. It is soname-versioned --
+# `libgmsh4.11` on one Debian release and something else on the next -- so
+# naming it pins this image to a release rather than to a package. That is how
+# `libgmsh4` got here: it is not a name any Debian has, and apt said so. It does
+# not need naming either way, because `python3-gmsh` is a ctypes wrapper that
+# cannot work without the library and therefore depends on whichever one it
+# needs; apt resolves that better than this file can.
+#
+# A package that cannot be installed says what this Debian *does* offer before
+# it fails. Without that, apt exits 100 and the log leaves you unable to tell a
+# renamed package from a dropped one -- which is the failure this step is most
+# likely to have again, since what it installs from is the base image's Debian
+# and that moves when the base does.
 RUN apt-get update \
-  && apt-get install --yes --no-install-recommends \
-    calculix-ccx \
-    libgmsh4 \
-    python3-gmsh \
+  && { apt-get install --yes --no-install-recommends calculix-ccx python3-gmsh \
+       || { echo "=== apt cannot install what this image is for ==="; \
+            . /etc/os-release && echo "base: ${PRETTY_NAME}"; \
+            apt-cache policy calculix-ccx || true; \
+            apt-cache search --names-only calculix || true; \
+            apt-cache search --names-only '^libgmsh' || true; \
+            apt-cache policy python3-gmsh || true; \
+            exit 1; }; } \
   && rm -rf /var/lib/apt/lists/*
 
 # gmsh's Python API is a single ctypes module wrapping `libgmsh.so`, which is
