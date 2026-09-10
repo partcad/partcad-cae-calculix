@@ -21,6 +21,7 @@ CI runner alike may have neither. That rules out an end-to-end run, and it does
 Run it with `pytest test_calculix.py`. It needs `numpy` and nothing else.
 """
 
+import re
 import os
 import sys
 
@@ -42,46 +43,43 @@ def test_a_machine_with_no_solver_is_told_what_to_install(monkeypatch):
     with pytest.raises(ccx.SolverMissing) as raised:
         ccx.find_ccx()
     message = str(raised.value)
-    # The three ways to get one, and the way out for a machine that has it
-    # somewhere else. A message that only says "not found" sends the reader to a
-    # search engine.
+    # Both ways to have it, because a reader with a container runtime and a
+    # reader without one need different answers and the message cannot tell
+    # which it is talking to. Then the three ways to install a native solver,
+    # and the way out for a machine that keeps one somewhere else. A message
+    # that only says "not found" sends the reader to a search engine; one that
+    # names a single remedy sends half of them to the wrong one.
+    assert "dockerImage:" in message
     assert "calculix-ccx" in message
     assert "conda" in message
     assert ccx.CCX_ENV in message
 
 
-def test_arm_linux_is_told_that_gmsh_has_no_wheel_for_it(monkeypatch):
-    """The one platform where the mesher cannot be installed at all.
+@pytest.mark.parametrize(
+    "system, machine",
+    [("Linux", "aarch64"), ("Linux", "x86_64"), ("Darwin", "arm64"), ("Windows", "AMD64")],
+)
+def test_a_runtime_without_gmsh_names_both_ways_to_get_one(monkeypatch, system, machine):
+    """A missing mesher has two remedies, and the message cannot tell which applies.
 
-    gmsh ships four wheels per release and none of them is linux aarch64, and it
-    ships no sdist either, so `partcad.yaml` carries a marker telling pip not to
-    try. What is left is a sandbox with no gmsh in it, and the reader has to be
-    told that this is the platform rather than something they forgot to install.
+    64-bit ARM Linux is the case that shapes it: gmsh publishes no wheel there
+    and no source distribution, so pip cannot supply it however the requirements
+    are written, and the image or a distribution package is the answer.
+    Everywhere else pip can, which is why the message names installing it too
+    rather than telling every reader to start Docker.
     """
-    monkeypatch.setattr(ccx.platform, "machine", lambda: "aarch64")
-    monkeypatch.setattr(ccx.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(ccx.platform, "machine", lambda: machine)
+    monkeypatch.setattr(ccx.platform, "system", lambda: system)
     monkeypatch.setitem(sys.modules, "gmsh", None)  # 'import gmsh' -> ImportError
 
     with pytest.raises(ccx.SolverMissing) as raised:
         ccx._gmsh()
     message = str(raised.value)
-    assert "ARM" in message
-    assert "x86_64" in message
-
-
-def test_a_sandbox_without_gmsh_elsewhere_says_only_that(monkeypatch):
-    """Everywhere else a missing gmsh is a broken sandbox, not a platform gap.
-
-    Saying "no wheel for this platform" on a machine that has one would send the
-    reader looking for a problem that is not there.
-    """
-    monkeypatch.setattr(ccx.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(ccx.platform, "system", lambda: "Linux")
-    monkeypatch.setitem(sys.modules, "gmsh", None)
-
-    with pytest.raises(ccx.SolverMissing) as raised:
-        ccx._gmsh()
-    assert "ARM" not in str(raised.value)
+    # What is missing, where, and both ways out.
+    assert "gmsh" in message
+    assert machine in message and system in message
+    assert "dockerImage:" in message
+    assert "install" in message
 
 
 def test_the_environment_variable_wins(monkeypatch, tmp_path):
@@ -331,6 +329,71 @@ def test_the_deck_is_written_in_metres():
     assert "*ELEMENT, TYPE=C3D4, ELSET=EALL" in lines
 
 
+def test_a_port_cannot_be_both_an_inlet_and_an_outlet():
+    """The same node written twice carries two degree-8 pressures in one step.
+
+    Which one CalculiX keeps is not something the deck says, so the deck is not
+    written at all: two ports selecting the same nodes is a model to fix, and
+    the message names which two.
+    """
+    import cfd_calculix
+
+    mesh = _one_tetrahedron()
+    driven = [("INLET", [1, 2, 3], {"load": 1.0})]
+    outlet = [("OUTLET", [3, 4], {})]
+
+    with pytest.raises(ccx.SolverFailed, match="INLET.*OUTLET"):
+        cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
+
+
+def test_two_driven_ports_cannot_share_nodes_either():
+    """Two inlets overlapping is the same fault as an inlet over an outlet.
+
+    Both write a degree-8 pressure of their own, so a shared node carries two
+    of them and CalculiX keeps whichever came last -- which makes the answer a
+    function of the order the ports were listed in.
+    """
+    import cfd_calculix
+
+    mesh = _one_tetrahedron()
+    driven = [("INLET_A", [1, 2], {"load": 1.0}), ("INLET_B", [2, 3], {"load": 5.0})]
+    outlet = [("OUTLET", [4], {})]
+
+    with pytest.raises(ccx.SolverFailed, match="INLET_A.*INLET_B"):
+        cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
+
+
+def test_two_outlets_may_share_nodes():
+    """Because both of them write the reference pressure, and nothing else.
+
+    The check is about a node the deck constrains twice to two *different*
+    values; two outlets constrain it twice to the same one, which the deck says
+    unambiguously however CalculiX resolves it.
+    """
+    import cfd_calculix
+
+    mesh = _one_tetrahedron()
+    driven = [("INLET", [1], {"load": 1.0})]
+    outlet = [("OUT_A", [2, 3], {}), ("OUT_B", [3, 4], {})]
+
+    lines = cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
+    assert any(line.startswith("OUT_A, 8, 8,") for line in lines)
+    assert any(line.startswith("OUT_B, 8, 8,") for line in lines)
+
+
+def test_ports_that_share_no_nodes_still_write_a_deck():
+    """The check is about overlap, not about having two ports."""
+    import cfd_calculix
+
+    mesh = _one_tetrahedron()
+    driven = [("INLET", [1, 2], {"load": 1.0})]
+    outlet = [("OUTLET", [3, 4], {})]
+
+    lines = cfd_calculix._deck(mesh, [], driven, outlet, {}, 0.2)
+    assert any(line.startswith("INLET, 8, 8,") for line in lines)
+    assert any(line.startswith("OUTLET, 8, 8,") for line in lines)
+
+
 def test_a_node_set_wraps_at_sixteen_entries():
     """CalculiX's own limit. A 17th entry on one line is a parse error there."""
     lines = ccx.deck_nset("PORT0", list(range(1, 40)))
@@ -577,24 +640,117 @@ def test_the_declared_parameters_are_all_numbers(module_name):
     config = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), "partcad.yaml")))
     analysis = module_name.split("_")[0]
     for name, value in config["cae"][analysis].items():
-        if name in ("desc", "path", "extension"):
+        # PartCAD's own keys, which describe the file type rather than parametrise
+        # the analysis: they never reach the script (see `IMPLEMENTATION_KEYS` in
+        # `partcad/output.py`) and none of them is a number.
+        if name in (
+            "desc",
+            "path",
+            "extension",
+            "package",
+            "dockerImage",
+            "container",
+            "pythonRequirements",
+            "pythonVersion",
+            "decode",
+        ):
             continue
         assert isinstance(value, (int, float)), "%s: %r is not a number" % (name, value)
 
 
-def test_the_package_declares_what_the_scripts_import():
-    """A requirement that is imported and not declared is one the sandbox lacks."""
+# What both scripts import beyond the standard library. Declared in
+# `partcad.yaml` as `pythonRequirements` *and* carried by the image, which is
+# the contract rather than a duplication: the image says where these run best,
+# the requirements say how they run at all.
+IMPORTS = ("gmsh", "numpy", "trimesh")
+
+
+def test_every_file_type_names_the_image_it_runs_best_in():
+    """`dockerImage` is a preference, and the pin has to be one that cannot move.
+
+    `ccx` is a native executable and gmsh publishes no wheel for 64-bit ARM
+    Linux, so the image is what lets this package work on a machine with
+    nothing installed. It is not what lets it work at all -- that is the
+    requirements below -- which is why a machine using conda or venv ignores
+    this line entirely.
+    """
+    import yaml
+
+    config = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), "partcad.yaml")))
+    for name, file_type in config["cae"].items():
+        image = file_type.get("dockerImage")
+        assert image, "%s names no image" % name
+        # An immutable tag. A moving one would let the image and the code
+        # expecting it drift apart with nothing to point at afterwards.
+        assert ":" in image.rsplit("/", 1)[-1], "%s pins no tag: %s" % (name, image)
+        assert not image.endswith((":latest", ":main", ":devel")), "%s pins a moving tag: %s" % (name, image)
+        # No architecture. PartCAD appends one and falls back to the bare name,
+        # so writing it here would pin the package to one machine.
+        assert not image.endswith(("-amd64", "-arm64")), "%s pins one architecture: %s" % (name, image)
+
+
+def test_the_pin_is_the_tag_this_repository_builds():
+    """Two files name it, and a pin nobody published fails at the first analysis."""
+    import subprocess
+
     import yaml
 
     here = os.path.dirname(__file__)
+    built = subprocess.run([os.path.join(here, "image-tag.sh")], capture_output=True, text=True, check=True)
+    config = yaml.safe_load(open(os.path.join(here, "partcad.yaml")))
+    for name, file_type in config["cae"].items():
+        assert file_type["dockerImage"].rsplit(":", 1)[1] == built.stdout.strip(), (
+            "%s pins a tag this repository does not build; run ./image-tag.sh" % name
+        )
+
+
+def test_the_workflow_and_the_dockerfile_name_one_base_image():
+    """The build reads the base image as a control, so it has to be the same one.
+
+    Before it decides a content tag is unpublished, the workflow inspects the
+    base image to prove the registry answered at all -- which only distinguishes
+    "absent" from "unreachable" if that is the image this actually builds
+    `FROM`. Two files naming it is two chances for one to move; the Dockerfile
+    is the one that decides.
+    """
+    import re
+
+    here = os.path.dirname(__file__)
+    dockerfile = open(os.path.join(here, "Dockerfile")).read()
+    workflow = open(os.path.join(here, ".github", "workflows", "image.yml")).read()
+
+    built_from = re.search(r"^FROM\s+(\S+?):", dockerfile, re.MULTILINE)
+    assert built_from, "the Dockerfile names no base image"
+    inspected = re.search(r"^\s*BASE_IMAGE:\s*(\S+)\s*$", workflow, re.MULTILINE)
+    assert inspected, "the workflow names no BASE_IMAGE"
+
+    assert built_from.group(1) == inspected.group(1), (
+        "the Dockerfile builds FROM %s but the workflow probes %s" % (built_from.group(1), inspected.group(1))
+    )
+
+
+def test_the_scripts_declare_everything_they_import():
+    """An import nothing installs is one that only works inside the image.
+
+    Which is the failure this contract exists to prevent: a package that runs
+    for whoever has Docker and fails for everyone else, without saying so.
+    """
+    here = os.path.dirname(__file__)
+    import yaml
+
     config = yaml.safe_load(open(os.path.join(here, "partcad.yaml")))
     declared = " ".join(config["pythonRequirements"])
+
     source = "".join(
         open(os.path.join(here, name)).read() for name in ("calculix_common.py", "fea_calculix.py", "cfd_calculix.py")
     )
-    for module in ("gmsh", "numpy", "trimesh"):
-        if "import %s" % module in source:
-            assert module in declared, "%s is imported but not declared" % module
+    imported = set(re.findall(r"^\s*import (\w+)", source, re.MULTILINE))
+    imported |= set(re.findall(r"^\s*from (\w+) import", source, re.MULTILINE))
+    stdlib = set(sys.stdlib_module_names) | {"calculix_common"}
+
+    for module in sorted(imported - stdlib):
+        assert module in IMPORTS, "%s is imported but is not one of this package's dependencies" % module
+        assert module in declared, "%s is imported but not declared in pythonRequirements" % module
 
 
 def test_every_declared_file_type_has_its_script_on_disk():

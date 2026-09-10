@@ -63,6 +63,7 @@ def _analyse(path, request):
     boundary = request.get("boundary") or []
     walls = [record for record in boundary if record.get("fix")]
     driven = [record for record in boundary if record.get("load")]
+    open_ends = [record for record in boundary if record.get("outlet")]
 
     if not walls:
         raise ccx.SolverFailed(
@@ -72,11 +73,22 @@ def _analyse(path, request):
         raise ccx.SolverFailed(
             "'cfd:' names nothing to drive the flow: name an inlet under 'load:' with the force behind it"
         )
+    if not open_ends:
+        # An incompressible flow is posed by differences in pressure. Driven at
+        # one end and closed everywhere else, the problem has no downstream
+        # reference: what is pushed in has nowhere to go, and CalculiX answers
+        # with a field that never moves or with `compdt: the solution diverged`
+        # -- neither of which says what is actually wrong.
+        raise ccx.SolverFailed(
+            "'cfd:' names no outlet, so the flow has nowhere to go and the problem has no "
+            "downstream pressure reference: name where it leaves under 'outlet:'"
+        )
 
     radius = request.get("port_radius", 0.05)
     wall_sets, wall_empty = ccx.port_node_sets(mesh, walls, radius, prefix="WALL")
     driven_sets, driven_empty = ccx.port_node_sets(mesh, driven, radius, prefix="IN")
-    for record in wall_empty + driven_empty:
+    outlet_sets, outlet_empty = ccx.port_node_sets(mesh, open_ends, radius, prefix="OUT")
+    for record in wall_empty + driven_empty + outlet_empty:
         findings.append(
             {
                 "severity": WARNING,
@@ -87,14 +99,14 @@ def _analyse(path, request):
                 "where": record.get("port") or record.get("interface_label") or "a port",
             }
         )
-    if not wall_sets or not driven_sets:
+    if not wall_sets or not driven_sets or not outlet_sets:
         raise ccx.SolverFailed(
-            "None of the walls or none of the driven ports is near any material. "
+            "None of the walls, none of the driven ports or none of the outlets is near any material. "
             "Check where 'implements:' places them, or raise 'port_radius'."
         )
 
     with tempfile.TemporaryDirectory() as work:
-        deck = _deck(mesh, wall_sets, driven_sets, request, radius)
+        deck = _deck(mesh, wall_sets, driven_sets, outlet_sets, request, radius)
         results = ccx.run_ccx(deck, work)
         # A CFD step is not named like a structural one: CalculiX writes `V3DF`
         # for velocity and `PS3DF` for static pressure, where a static step
@@ -134,6 +146,12 @@ def _analyse(path, request):
 
 
 def _verdict(peak_speed, pressure_drop, request):
+    """What the numbers mean, as findings.
+
+    The thresholds are parameters of the file type, the same way `fea`'s are, so
+    a package that knows what its own channel is for says so once in its `cae:`
+    section instead of arguing with a default on every part.
+    """
     findings = []
 
     limit = request.get("max_velocity")
@@ -182,10 +200,10 @@ def _increment_cap(request):
     return max(100, min(1000000, int(2 * duration / step)))
 
 
-def _deck(mesh, wall_sets, driven_sets, request, radius_fraction):
+def _deck(mesh, wall_sets, driven_sets, outlet_sets, request, radius_fraction):
     """The CalculiX CFD deck: the mesh, the fluid, the boundaries, the step."""
     lines = ccx.deck_mesh(mesh)
-    for name, nodes, _record in wall_sets + driven_sets:
+    for name, nodes, _record in wall_sets + driven_sets + outlet_sets:
         lines.extend(ccx.deck_nset(name, nodes))
 
     # Every card below except the first two is here because CalculiX asked for
@@ -245,16 +263,68 @@ def _deck(mesh, wall_sets, driven_sets, request, radius_fraction):
         lines.append("*BOUNDARY")
         lines.append("%s, 1, 3, 0." % name)
 
+    # And held at the reference temperature, here and at the inlet. An
+    # isothermal run still solves the energy equation -- CalculiX's `*CFD` has
+    # no way to be told not to -- and an equation with no Dirichlet condition
+    # anywhere is unconstrained: the field drifts off its initial value over a
+    # few increments and the run ends in
+    #
+    #   *ERROR in initialcfd: absolute temperature is nearly zero; maybe
+    #          absolute zero was wrongly defined or not defined at all
+    #
+    # which reads as a mistake on the `*PHYSICAL CONSTANTS` card and is not one.
+    # Degree of freedom 11 is the temperature of a CFD node.
+    for name, _nodes, _record in wall_sets + driven_sets:
+        lines.append("*BOUNDARY")
+        lines.append("%s, 11, 11, %.9g" % (name, temperature))
+
     # The driven boundaries, as a static pressure. The area a port's
     # neighbourhood stands for is the disc of the search radius, which is the
     # only area a coordinate frame implies; a port that means something else
     # should say so with its own `port_radius`.
+    #
+    # Both ends are written against `pressure_reference`, and that is the whole
+    # of what an incompressible run is driven by: a *difference*. Written as an
+    # absolute pressure instead -- which is what this did -- an inlet of a few
+    # hundred pascals sits under a field initialised at one atmosphere, so the
+    # deck says the fluid is being sucked backwards out of the inlet as hard as
+    # the atmosphere can push, and the answer is a dead field.
+    # One node, one pressure. Written into the deck twice it carries two
+    # degree-8 constraints in one step, and CalculiX's rule for that is to keep
+    # the later one -- so the model that gets solved would be decided by the
+    # order the ports happen to be listed in, which is not something the model
+    # says. Two ports that overlap is a model somebody has to fix, so say which
+    # ones rather than solving an arbitrary one of the readings.
+    #
+    # Every pair that could write a *different* pressure, which is two of the
+    # three kinds of pair: a driven port against another driven port carries a
+    # rise each, and a driven port against an outlet carries a rise and the
+    # reference. Two outlets are not a pair -- both write the reference, so the
+    # deck says the same thing whichever one CalculiX keeps.
+    pressure_sets = [(name, nodes) for name, nodes, _record in driven_sets]
+    outlet_pairs = [(name, nodes) for name, nodes, _record in outlet_sets]
+    for index, (name, nodes) in enumerate(pressure_sets):
+        for other_name, other_nodes in pressure_sets[index + 1 :] + outlet_pairs:
+            shared = set(nodes) & set(other_nodes)
+            if shared:
+                raise ccx.SolverFailed(
+                    "ports '%s' and '%s' select %d of the same mesh nodes, so the deck would constrain "
+                    "those nodes to two pressures at once. Move the ports apart, or narrow them with a "
+                    "smaller radius." % (name, other_name, len(shared))
+                )
+
     area = math.pi * (mesh.extent * float(radius_fraction) / ccx.MM_PER_M) ** 2
     for name, _nodes, record in driven_sets:
-        pressure = float(record["load"]) / max(area, 1e-12)
+        rise = float(record["load"]) / max(area, 1e-12)
         lines.append("*BOUNDARY")
         # Degree of freedom 8 is the static pressure of a CFD node.
-        lines.append("%s, 8, 8, %.9g" % (name, pressure))
+        lines.append("%s, 8, 8, %.9g" % (name, pressure_reference + rise))
+
+    # Where it leaves: the reference itself, which is what makes the inlet's
+    # rise a rise rather than a number.
+    for name, _nodes, _record in outlet_sets:
+        lines.append("*BOUNDARY")
+        lines.append("%s, 8, 8, %.9g" % (name, pressure_reference))
 
     lines.extend(
         [

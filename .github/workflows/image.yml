@@ -1,0 +1,168 @@
+# The runtime these analyses run in, built and published from the repository
+# that owns them.
+#
+# It used to be built in partcad/partcad, which was the wrong place: that made a
+# release of PartCAD carry a release of this package's runtime, and the two do
+# not move together. Here, an edit to the Dockerfile publishes a new tag and the
+# `partcad.yaml` beside it pins that tag in the same commit.
+name: Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    # The base image moves; this does not. Building nightly against the moving
+    # base tag is what turns "PartCAD's base image broke this plugin" into a
+    # failure here rather than into a user's analysis failing weeks later.
+    - cron: "0 5 * * *"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/partcad/partcad-cae-calculix
+  # What the Dockerfile builds `FROM`, named here as well because the build
+  # below uses it as a registry that must answer. The two have to agree; the
+  # Dockerfile is the one that decides.
+  BASE_IMAGE: ghcr.io/partcad/partcad-container-python
+  # The interpreter these analyses run on, and so which base image to build on.
+  # PartCAD's own default; this package declares no `pythonVersion`, so a
+  # different value here would produce an image nothing asks for.
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  build:
+    name: "Build the runtime image"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: The tag this is published under
+        id: tag
+        env:
+          PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
+        run: echo "TAG=$(./image-tag.sh)" >> "${GITHUB_OUTPUT}"
+
+      # A pin that does not match what this build produces is a package naming
+      # an image nobody published, which fails at the first analysis rather than
+      # here. Checked before anything is built, so the answer arrives in seconds.
+      - name: The pin matches what is about to be built
+        env:
+          TAG: ${{ steps.tag.outputs.TAG }}
+        run: |
+          # Every pin, not the first one: this file names an image per file
+          # type, and checking only 'fea' let a stale 'cfd' pin through -- which
+          # is a package naming an image nobody published, discovered at the
+          # first analysis rather than here.
+          FOUND=0
+          FAILED=0
+          for PINNED in $(grep -o 'dockerImage: [^ ]*' partcad.yaml | sed 's/.*://'); do
+            FOUND=$((FOUND + 1))
+            if [ "${PINNED}" != "${TAG}" ]; then
+              echo "partcad.yaml pins '${PINNED}' but this builds '${TAG}'." >&2
+              FAILED=1
+            fi
+          done
+          if [ "${FOUND}" -eq 0 ]; then
+            echo "partcad.yaml names no image at all; this workflow builds one nothing asks for." >&2
+            exit 1
+          fi
+          if [ "${FAILED}" -ne 0 ]; then
+            echo "Run ./image-tag.sh and update every 'dockerImage:' line." >&2
+            exit 1
+          fi
+          echo "partcad.yaml and the build agree on ${TAG}, across ${FOUND} declaration(s)."
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # On a pull request too, which does not push anything. What it reads is
+      # the point: the base image this builds `FROM` is a GitHub Packages image,
+      # and those are private until somebody makes them public -- so an
+      # anonymous pull is a 403 before the first layer, and the registry cache
+      # below is unreadable as well.
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # One build per architecture rather than a manifest list, because that is
+      # the convention PartCAD pulls by: it appends the architecture to the tag
+      # and falls back to the bare name. A package therefore pins one line and
+      # gets whichever it needs.
+      #
+      # A pull request builds without pushing: the build is the test -- the
+      # Dockerfile runs the base image's contract check and this package's own,
+      # so an image that cannot mesh or solve fails here.
+      # The nightly run publishes only the moving tag. Its whole purpose is to
+      # rebuild against a base image that has moved, so what it produces is by
+      # definition not what the content tag names -- and a content tag that can
+      # be republished is not immutable, whatever the comment in `image-tag.sh`
+      # says. A `dockerImage:` pin has to keep meaning what it meant.
+      - name: Build
+        env:
+          TAG: ${{ steps.tag.outputs.TAG }}
+          PUSH: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
+          PIN_MOVES: ${{ github.event_name != 'schedule' && 'true' || 'false' }}
+        run: |
+          for ARCH in amd64 arm64; do
+            echo "::group::${ARCH}"
+            TAGS="--tag ${IMAGE}:latest-${ARCH}"
+            if [ "${PIN_MOVES}" = "true" ]; then
+              # A content tag is only immutable if nothing republishes it, and
+              # excusing the nightly run is not enough. A push to main that
+              # leaves the Dockerfile alone -- a README edit, a test, this
+              # workflow -- computes the tag that is already published, and
+              # would overwrite it with an image built from a base that has
+              # moved since. So a tag that is already out there is left as it
+              # is. The build still runs, because a base image that breaks this
+              # plugin has to fail here; it is only the tag that is withheld,
+              # and `latest-<arch>` still moves.
+              #
+              # `imagetools inspect` says "no" the same way whether the tag is
+              # absent or the registry never answered, and those two must not
+              # mean the same thing here: reading a 401 as "not published"
+              # republishes the tag this is trying to protect. Rather than
+              # matching on the wording of an error, the second inspect is a
+              # control that must succeed -- the base image, which exists
+              # whenever this build can work at all, in the same registry
+              # through the same login. If even that cannot be seen, the
+              # registry is not answering and "absent" is not a conclusion this
+              # build is entitled to draw, so it stops.
+              if docker buildx imagetools inspect "${IMAGE}:${TAG}-${ARCH}" >/dev/null 2>&1; then
+                echo "${IMAGE}:${TAG}-${ARCH} is published already; building it, not republishing it."
+              elif docker buildx imagetools inspect "${BASE_IMAGE}:py${PYTHON_VERSION}-${ARCH}" >/dev/null 2>&1; then
+                TAGS="--tag ${IMAGE}:${TAG}-${ARCH} ${TAGS}"
+              else
+                echo "Neither ${IMAGE}:${TAG}-${ARCH} nor ${BASE_IMAGE}:py${PYTHON_VERSION}-${ARCH} could be" >&2
+                echo "read from the registry, so whether the tag is published is not something this build" >&2
+                echo "knows. Refusing to publish it rather than overwriting what somebody has pinned." >&2
+                exit 1
+              fi
+            fi
+            docker buildx build \
+              --platform "linux/${ARCH}" \
+              --build-arg "PYTHON_VERSION=${PYTHON_VERSION}" \
+              --build-arg "ARCH=${ARCH}" \
+              ${TAGS} \
+              --cache-from "type=registry,ref=${IMAGE}:latest-${ARCH}" \
+              --cache-to type=inline \
+              --output "type=image,push=${PUSH}" \
+              .
+            echo "::endgroup::"
+          done

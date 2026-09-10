@@ -32,9 +32,11 @@ import subprocess
 import tempfile
 
 # Where to look for the solver, after PATH. The names the distributions use:
-# Debian and Ubuntu ship `ccx` in `calculix-ccx`, Homebrew and the CalculiX
-# binaries from calculix.de use `ccx_<version>`, and conda-forge uses `ccx`.
-CCX_NAMES = ("ccx", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_static")
+# Ubuntu ships `ccx` in `calculix-ccx` and Debian did until 13 dropped the
+# package, Homebrew and the CalculiX binaries from calculix.de use
+# `ccx_<version>`, and conda-forge -- which is where this package's image gets
+# its solver -- uses `ccx`.
+CCX_NAMES = ("ccx", "ccx_2.23", "ccx_2.22", "ccx_2.21", "ccx_2.20", "ccx_static")
 CCX_DIRECTORIES = ("/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/CalculiX/bin")
 
 # The environment variable that overrides all of that, for a machine where the
@@ -48,7 +50,23 @@ MM_PER_M = 1000.0
 
 
 class SolverMissing(Exception):
-    """No CalculiX on this machine, with the sentence that says what to install."""
+    """Something this analysis needs is not where it is running.
+
+    There are two ways to have it, so the sentence names both. `partcad.yaml`
+    declares an image carrying the solver and the mesher, which is what a
+    machine with a container runtime gets; a machine without one runs these
+    scripts in a conda or venv sandbox, where the Python half is installed from
+    `pythonRequirements` and the native half has to be on the host already.
+
+    PartCAD reports whatever this says verbatim as the reason the analysis
+    failed, so it is the whole of what a user gets. "Not installed" without a
+    remedy sends them to a search engine; a remedy that names only one of the
+    two sends half of them to the wrong one.
+
+    It is a failure. Not running is not excused any more -- a part that declares
+    `fea:` has asked a question, and this package answering nothing has failed
+    whatever the reason.
+    """
 
 
 class SolverFailed(Exception):
@@ -56,28 +74,35 @@ class SolverFailed(Exception):
 
 
 def _gmsh():
-    """The gmsh module, or raise saying why this machine does not have one.
+    """The gmsh module, or raise saying both ways to get one.
 
-    A platform gap rather than something the user forgot to install, on exactly
-    one platform: gmsh publishes four wheels per release -- macOS x86_64, macOS
-    arm64, manylinux x86_64 and win_amd64 -- and **no** linux aarch64 wheel and
-    no sdist, in every release from 4.12 to 4.15. So there is nothing pip can
-    install on 64-bit ARM Linux, and `partcad.yaml` tells it not to try.
+    There is a platform gap underneath this. gmsh publishes four wheels per
+    release -- macOS x86_64, macOS arm64, manylinux x86_64 and win_amd64 -- and
+    no linux aarch64 wheel and no source distribution, in every release from
+    4.12 to 4.15, so pip cannot supply it on 64-bit ARM Linux however carefully
+    the requirements are written. That is what `dockerImage:` closes: Debian
+    builds gmsh for arm64, and the image takes it from there.
 
-    Reported as `SolverMissing` for the same reason a missing `ccx` is: it is a
-    statement about this machine, not about the part, so `pc test` warns and
-    moves on rather than failing a package that is perfectly well formed.
+    It closes it only for a machine that can run a container, though, which is
+    why the marker on `gmsh` in `pythonRequirements` is not a contradiction:
+    everywhere pip *can* supply it, it does, and on the one platform where it
+    cannot the image or a distribution package is the answer.
     """
     try:
         import gmsh
     except ImportError as e:
-        if platform.machine() in ("aarch64", "arm64") and platform.system() == "Linux":
-            raise SolverMissing(
-                "gmsh publishes no wheel for 64-bit ARM Linux and no source distribution, so this "
-                "analysis cannot run on this machine. Use an x86_64 machine, or build gmsh's Python "
-                "module yourself and put it on the sandbox's path."
-            ) from e
-        raise SolverMissing("gmsh is not installed in this sandbox: %s" % e) from e
+        raise SolverMissing(
+            "gmsh is not importable on this %s-%s machine. Two ways to have it: run with a "
+            "container runtime available, which gets the image named by `dockerImage:` in "
+            "partcad.yaml and carries gmsh for every architecture -- or install it here, which pip "
+            "can do everywhere except 64-bit ARM Linux, where gmsh publishes no wheel and no source "
+            "distribution, so it has to come from somewhere that is not pip -- `python3-gmsh` or "
+            "conda-forge, both of which build it for arm64. A distribution package installs into the "
+            "system interpreter rather than into the sandbox this is running in, so it also has to be "
+            "reachable from here: point PYTHONPATH at the directory holding the `gmsh.py` it installs, "
+            "or build the sandbox with the system site-packages visible. "
+            "Underlying error: %s" % (platform.system(), platform.machine(), e)
+        ) from e
     return gmsh
 
 
@@ -100,9 +125,19 @@ def find_ccx():
                 return candidate
 
     raise SolverMissing(
-        "CalculiX (ccx) is not installed on this machine. Install it with "
-        "'apt install calculix-ccx', 'brew install calculix-ccx' or "
-        "'conda install -c conda-forge calculix', or point %s at the executable." % CCX_ENV
+        "the CalculiX solver (ccx) is not available on this %s machine. Two ways to have it: run "
+        "with a container runtime available, which gets the image named by `dockerImage:` in "
+        "partcad.yaml and carries the solver -- or install it here, which pip cannot do because it "
+        "is a native executable: 'conda install -c conda-forge calculix' anywhere conda is, "
+        "'apt install calculix-ccx' on Ubuntu -- Debian 13 has no such package -- "
+        "'brew install brewsci/science/calculix-ccx' on macOS, or point %s at the executable. "
+        "Searched: %s on PATH, then %s"
+        % (
+            platform.system(),
+            CCX_ENV,
+            ", ".join(CCX_NAMES),
+            ", ".join(CCX_DIRECTORIES) if CCX_DIRECTORIES else "nowhere else",
+        )
     )
 
 
