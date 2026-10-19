@@ -246,6 +246,17 @@ def mesh_shape(shape, size_fraction, order):
             gmsh.option.setNumber("Mesh.MeshSizeMin", target / 3.0)
             gmsh.option.setNumber("Mesh.MeshSizeMax", target)
             gmsh.option.setNumber("Mesh.ElementOrder", int(order))
+            # Second-order tetrahedra with straight edges: each mid-side node at
+            # the middle of its edge rather than moved out onto the curved
+            # surface the edge spans. Moved out, the mid-side nodes of the small
+            # elements on a tight curve -- the flank of a gear's tooth, a fillet
+            # -- fold an element inside out, and CalculiX refuses the whole mesh
+            # with "nonpositive jacobian" and writes no stresses at all. A
+            # straight-sided quadratic element is still quadratic in what it
+            # interpolates, which is what makes it bend as it should; what it
+            # gives up is following a curve between two nodes, which a mesh fine
+            # enough to resolve the curve's stresses follows anyway.
+            gmsh.option.setNumber("Mesh.SecondOrderLinear", 1)
             gmsh.model.mesh.generate(3)
 
             raw_ids, raw_coords, _ = gmsh.model.mesh.getNodes()

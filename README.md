@@ -92,6 +92,27 @@ pc test -f fea :bracket             # the same analysis, as a check
 or without a plural `s` — or a bare number, which is a mass in kilograms. PartCAD weighs a mass into a force
 before this package sees it, so everything here is newtons.
 
+A force written that way is applied **straight down**, along the part's -Z, which is where a weight goes. One
+written as **three**, `[x, y, z]` in the part's own frame, is applied **along that direction** — what a
+simulation measured pushing on a part is seldom straight down. And the part is weighed at 9.81 m/s² along -Z
+(`self_weight`), unless its `fea:` states **`gravity:`**, the acceleration of free fall it is analysed in, in
+its own frame: a part a simulation found upside down, or accelerating, is weighed by `g - a`, and a gravity of
+nought weighs nothing:
+
+```yaml
+    fea:
+      fix:
+        //pub/robotics/parts/gobilda:4xM4-16mm-pattern-threaded-thru-4mm: [outer]
+      load:
+        "//pub/robotics/parts/gobilda:gear-28t;module=1.25,shift=0.2":
+          "13-tooth": [0 N, -2.7 N, -155.2 N]   # the tooth the worm holds it by
+      gravity: [0, -8.962, -3.990]              # the gear stands on its edge
+```
+
+`partcad.yaml` says so with `reads: [force, gravity]` on the `fea` file type: PartCAD hands either over only
+to an implementation that says it reads it, and refuses rather than have one answer as if neither had been
+written. `cfd` reads neither.
+
 The result model is written to `<part>.<analysis>.glb` and shown in the PartCAD Viewer's FEA and CFD tabs,
 turned and zoomed like any other 3D object. The findings are listed under it.
 
@@ -136,6 +157,12 @@ that ships it, which `package:` names, so a re-tuned copy inherits the image alo
 
 `calculix_common.py` is all of that except the deck and the field, which are the only two things the two
 analyses actually differ in.
+
+The stress analysis meshes with second-order tetrahedra (C3D10) whose edges are **straight**: gmsh puts each
+mid-side node at the middle of its edge rather than out on the curved surface the edge spans. Out on the
+surface, the small elements on a tight curve -- a gear's tooth flank, a fillet -- fold inside out, and CalculiX
+refuses the whole mesh ("nonpositive jacobian") and writes no stresses at all. A straight-sided quadratic
+element still bends as a quadratic one does; what it gives up is following a curve between two of its nodes.
 
 ### A port is a neighbourhood, not a face
 
@@ -262,7 +289,8 @@ An end-to-end run needs the image, so this suite deliberately does not attempt o
 the parts most likely to be quietly wrong. What is covered is the `.frd` reader (fixed-column parsing,
 including the case where two negative values fill their fields and touch, which is what rules out splitting the
 line on whitespace), `von_mises` against its closed form, `surface_triangles` finding exactly the faces one
-element owns, the port-to-node-set mapping, the deck writer's 16-per-line node sets, that a runtime without the
+element owns, the port-to-node-set mapping, the deck writer's 16-per-line node sets, a load applied straight down or
+along the direction the part stated and the part weighed under its own gravity, that a runtime without the
 solver or the mesher says which one and what would explain it, and that both file types declare the image and
 pin it to something immutable.
 
