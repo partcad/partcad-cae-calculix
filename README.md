@@ -169,7 +169,8 @@ element still bends as a quadratic one does; what it gives up is following a cur
 This is the one modelling decision worth arguing with. A PartCAD port is a coordinate frame: it says where a
 bolt goes, not which surface it clamps. So a fixed port becomes the mesh nodes within `port_radius` (a
 fraction of the part's largest dimension) of where the port is, and a loaded port spreads its force over the
-same neighbourhood. Get that radius wrong and the answer is wrong in a way that looks plausible — too small
+surface of the same neighbourhood, each node's share the surface it stands for -- as a traction would be, so
+that where the mesher happened to put its nodes does not move the load. Get that radius wrong and the answer is wrong in a way that looks plausible — too small
 and the load is a point load with an artificial stress concentration under it, too large and a bolt hole
 clamps half the bracket. It is a parameter of the file type for exactly that reason, and a port that reaches
 no material at all is reported as a finding rather than passed over.

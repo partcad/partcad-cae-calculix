@@ -181,6 +181,45 @@ class Mesh:
         within = np.einsum("ij,ij->i", offsets, offsets) <= float(radius) ** 2
         return [int(self.node_ids[index]) for index in np.flatnonzero(within)]
 
+    def surface_shares(self, point, radius):
+        """How a force on the surface within `radius` of `point` divides between the nodes: `{node id: fraction}`.
+
+        Each outward triangle whose centroid is that near stands for its area,
+        and the area goes where a uniform traction over the triangle puts it:
+        on a first-order mesh a third to each corner; on a second-order one a
+        third to each mid-side node and nothing to the corners, which is what a
+        six-node triangle's consistent load is. So the load is where the surface
+        is and as dense as it is -- not a share per node, which loads a node
+        inside the material like one on the surface, and a row of nodes the
+        mesher packed along a curve as hard as a whole patch; and not on a
+        quadratic element's corners, where it stands on a few nodes as a point
+        load would. Empty when no such triangle exists: a neighbourhood with no
+        surface in it.
+        """
+        import numpy as np
+
+        middles = {}
+        for _element_id, nodes in self.elements:
+            # CalculiX's C3D10: the corners, then the middles of 1-2, 2-3, 3-1,
+            # 1-4, 2-4 and 3-4.
+            if len(nodes) == 10:
+                for (a, b), middle in zip(((0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)), nodes[4:]):
+                    middles[frozenset((int(nodes[a]), int(nodes[b])))] = int(middle)
+        centre = np.asarray(point, dtype=float)
+        areas = {}
+        for corners in self.surface_triangles():
+            a, b, c = self.coordinates[corners]
+            if np.linalg.norm((a + b + c) / 3.0 - centre) > float(radius):
+                continue
+            area = 0.5 * float(np.linalg.norm(np.cross(b - a, c - a)))
+            ids = [int(self.node_ids[index]) for index in corners]
+            if middles:
+                ids = [middles[frozenset((ids[k], ids[(k + 1) % 3]))] for k in range(3)]
+            for node in ids:
+                areas[node] = areas.get(node, 0.0) + area / 3.0
+        total = sum(areas.values())
+        return {node: area / total for node, area in areas.items()} if total > 0 else {}
+
     def surface_triangles(self):
         """The outward faces of the mesh, as triangles of node indices.
 

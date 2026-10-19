@@ -40,7 +40,7 @@ mean something:
 * **A port is a neighbourhood, not a face.** A PartCAD port is a coordinate
   frame -- it says where a bolt goes, not which surface it clamps -- so a fixed
   port becomes the mesh nodes within `port_radius` of it, and a loaded port
-  spreads its force over the nodes in the same neighbourhood. A port that
+  spreads its force over the surface of the same neighbourhood, by area. A port that
   reaches no material at all is reported as a finding, because a solver told to
   hold nothing still answers with nonsense rather than with an error.
 """
@@ -227,14 +227,25 @@ def _deck(mesh, fixed_sets, loaded_sets, request):
         lines.append("%s, 1, 3, 0.0" % name)
 
     for name, nodes, record in loaded_sets:
-        # The force is spread evenly over the neighbourhood, and it is a force on
-        # the port rather than per node: a finer mesh must not load the part
-        # harder. In the direction the part stated, in its own frame, which is
-        # the frame the mesh is in; along -Z, which is where a weight goes, where
-        # it stated a magnitude alone.
+        # The force is spread over the surface of the neighbourhood as a traction
+        # would be, each node's share the surface it stands for -- and it is a
+        # force on the port rather than per node: a finer mesh must not load the
+        # part harder, and one that packs its nodes along an edge must not load
+        # that edge harder. Evenly over the nodes where the neighbourhood holds
+        # no whole surface triangle. In the direction the part stated, in its own
+        # frame, which is the frame the mesh is in; along -Z, which is where a
+        # weight goes, where it stated a magnitude alone.
+        location = record.get("location") or [[0, 0, 0], [0, 0, 1], 0]
+        shares = mesh.surface_shares(location[0], mesh.extent * float(request.get("port_radius", 0.05)))
         lines.append("*CLOAD")
         for degree, component in enumerate(_force_of(record), start=1):
-            if component:
+            if not component:
+                continue
+            if shares:
+                lines.extend(
+                    "%d, %d, %.9g" % (node, degree, component * share) for node, share in sorted(shares.items())
+                )
+            else:
                 lines.append("%s, %d, %.9g" % (name, degree, component / len(nodes)))
 
     gravity = _gravity_of(request)

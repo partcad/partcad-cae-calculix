@@ -798,6 +798,62 @@ def test_a_load_with_a_direction_is_applied_along_it_in_the_parts_frame():
     assert not any(line.startswith("LOAD0, 2,") for line in step)
 
 
+def test_a_load_is_shared_by_the_surface_each_node_stands_for():
+    """A third of every surface triangle near the port, to each of its corners.
+
+    Not a share per node: that loads a node inside the material like one on
+    the surface, and a row of nodes a mesher packed along a curve as hard as a
+    whole patch -- which on a worm gear's tooth read as a third more peak stress
+    from nothing but where the nodes fell.
+    """
+    tetrahedron = _one_tetrahedron()
+    # Three faces of 50 mm^2 meet at node 1; each other node has two of them and
+    # the slanted face, 50 sqrt(3).
+    slanted = 50.0 * 3**0.5
+    total = 150.0 + slanted
+    shares = tetrahedron.surface_shares([2.5, 2.5, 2.5], 100.0)
+    assert shares[1] == pytest.approx(50.0 / total)
+    for node in (2, 3, 4):
+        assert shares[node] == pytest.approx((100.0 + slanted) / 3.0 / total)
+    # Within a millimetre of the bottom face's centroid, that face alone.
+    bottom = [10.0 / 3, 10.0 / 3, 0.0]
+    assert tetrahedron.surface_shares(bottom, 1.0) == pytest.approx({1: 1 / 3, 2: 1 / 3, 3: 1 / 3})
+    # And nowhere near the surface, nothing.
+    assert tetrahedron.surface_shares([50.0, 50.0, 50.0], 1.0) == {}
+
+    import fea_calculix
+
+    lines = fea_calculix._deck(
+        tetrahedron,
+        [("FIX0", [4], {"fix": True})],
+        [("LOAD0", [1, 2, 3], {"load": 9.0, "location": [bottom, [0, 0, 1], 0]})],
+        {"self_weight": False, "port_radius": 0.1},
+    )
+    cload = lines.index("*CLOAD")
+    assert lines[cload + 1 : cload + 4] == ["1, 3, -3", "2, 3, -3", "3, 3, -3"]
+
+
+def test_on_second_order_elements_a_load_is_on_the_mid_side_nodes():
+    """A six-node triangle's consistent load under a uniform traction: a third to each middle, none to a corner.
+
+    On the corners it would stand on a few nodes, as a point load does, and the
+    stress under each would be the mesh's rather than the part's.
+    """
+    corners = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]])
+    # CalculiX's C3D10 order: the middles of 1-2, 2-3, 3-1, 1-4, 2-4, 3-4.
+    edges = [(0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3)]
+    middles = np.array([(corners[a] + corners[b]) / 2 for a, b in edges])
+    tetrahedron = ccx.Mesh(
+        node_ids=np.arange(1, 11, dtype=np.int64),
+        coordinates=np.vstack([corners, middles]),
+        elements=[(1, list(range(1, 11)))],
+        element_type="C3D10",
+        extent=10.0,
+    )
+    shares = tetrahedron.surface_shares([10.0 / 3, 10.0 / 3, 0.0], 1.0)
+    assert shares == pytest.approx({5: 1 / 3, 6: 1 / 3, 7: 1 / 3})
+
+
 def test_the_part_is_weighed_along_minus_z_unless_it_states_its_own_gravity():
     assert "EALL, GRAV, 9.81, 0, 0, -1" in _step({"load": 1.0}, {})
     # Upside down, and accelerating a little sideways: weighed along what it said.
