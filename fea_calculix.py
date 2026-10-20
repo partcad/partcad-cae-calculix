@@ -27,11 +27,20 @@ mean something:
   mass is a thing being carried, so it arrives here already weighed
   (`partcad.cae` does that, at 9.8 N/kg). Whether the part's own weight is added
   is `self_weight`, on by default: a shelf that carries 5 kg is also a shelf.
+  A load is applied straight down, along -Z, where a weight goes -- unless the
+  part stated its direction, `[x, y, z]` in its own frame, which arrives on the
+  port's record as `force` and is applied as it is: what a simulation measured
+  pushing on a gear's tooth is not straight down. And the part is weighed along
+  -Z at 9.81 m/s^2 -- unless it stated `gravity:`, the acceleration of free fall
+  it is analysed in, in its own frame, which replaces that and `self_weight`
+  both: a part a simulation found upside down hangs by its weight the other way.
+  Both are listed in `reads:` in `partcad.yaml`, which is how PartCAD knows to
+  hand them here rather than refuse.
 
 * **A port is a neighbourhood, not a face.** A PartCAD port is a coordinate
   frame -- it says where a bolt goes, not which surface it clamps -- so a fixed
   port becomes the mesh nodes within `port_radius` of it, and a loaded port
-  spreads its force over the nodes in the same neighbourhood. A port that
+  spreads its force over the surface of the same neighbourhood, by area. A port that
   reaches no material at all is reported as a finding, because a solver told to
   hold nothing still answers with nonsense rather than with an error.
 """
@@ -218,21 +227,32 @@ def _deck(mesh, fixed_sets, loaded_sets, request):
         lines.append("%s, 1, 3, 0.0" % name)
 
     for name, nodes, record in loaded_sets:
-        # The force is spread evenly over the neighbourhood, and it is a force on
-        # the port rather than per node: a finer mesh must not load the part
-        # harder. Along -Z, which is where a weight goes: PartCAD's `load:` is a
-        # magnitude, and a direction is not something a part can state yet.
-        share = float(record["load"]) / len(nodes)
+        # The force is spread over the surface of the neighbourhood as a traction
+        # would be, each node's share the surface it stands for -- and it is a
+        # force on the port rather than per node: a finer mesh must not load the
+        # part harder, and one that packs its nodes along an edge must not load
+        # that edge harder. Evenly over the nodes where the neighbourhood holds
+        # no whole surface triangle. In the direction the part stated, in its own
+        # frame, which is the frame the mesh is in; along -Z, which is where a
+        # weight goes, where it stated a magnitude alone.
+        location = record.get("location") or [[0, 0, 0], [0, 0, 1], 0]
+        shares = mesh.surface_shares(location[0], mesh.extent * float(request.get("port_radius", 0.05)))
         lines.append("*CLOAD")
-        lines.append("%s, 3, %.9g" % (name, -share))
+        for degree, component in enumerate(_force_of(record), start=1):
+            if not component:
+                continue
+            if shares:
+                lines.extend(
+                    "%d, %d, %.9g" % (node, degree, component * share) for node, share in sorted(shares.items())
+                )
+            else:
+                lines.append("%s, %d, %.9g" % (name, degree, component / len(nodes)))
 
-    if request.get("self_weight", True):
-        # 9.81 m/s^2 along -Z. Note that this is the solver's gravity and not
-        # `partcad.cae.GRAVITY`, which is the number a *declaration* of a mass is
-        # weighed by; they are the same quantity to two figures and neither
-        # should be derived from the other.
+    gravity = _gravity_of(request)
+    if gravity is not None:
+        magnitude, direction = gravity
         lines.append("*DLOAD")
-        lines.append("EALL, GRAV, 9.81, 0., 0., -1.")
+        lines.append("EALL, GRAV, %.9g, %.9g, %.9g, %.9g" % ((magnitude,) + direction))
 
     lines.extend(
         [
@@ -244,6 +264,35 @@ def _deck(mesh, fixed_sets, loaded_sets, request):
         ]
     )
     return lines
+
+
+def _force_of(record):
+    """The force on one loaded port, newtons in the part's frame: as stated, or its magnitude straight down."""
+    force = record.get("force")
+    if isinstance(force, (list, tuple)) and len(force) == 3:
+        return [float(component) for component in force]
+    return [0.0, 0.0, -float(record["load"])]
+
+
+def _gravity_of(request):
+    """The gravity the part is weighed under, '(m/s^2, unit direction)', or None to weigh it not at all.
+
+    The part's own `gravity:`, in its frame, where it stated one -- a gravity of
+    nought weighs nothing; otherwise 9.81 m/s^2 along -Z when `self_weight` is
+    on. That is the solver's gravity and not `partcad.cae.GRAVITY`, which is the
+    number a *declaration* of a mass is weighed by; they are the same quantity
+    to two figures and neither should be derived from the other.
+    """
+    stated = request.get("gravity")
+    if isinstance(stated, (list, tuple)) and len(stated) == 3:
+        vector = [float(component) for component in stated]
+        magnitude = sum(component * component for component in vector) ** 0.5
+        if magnitude == 0.0:
+            return None
+        return magnitude, tuple(component / magnitude for component in vector)
+    if request.get("self_weight", True):
+        return 9.81, (0.0, 0.0, -1.0)
+    return None
 
 
 # Importable as a module by its sibling, and executed by PartCAD's meta-wrapper
