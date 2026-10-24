@@ -62,7 +62,8 @@ one node. Whatever fixes the solver will also have to find the *face* a port lie
 ## Using it
 
 Declare the boundary conditions on the part, in a section named after the analysis. They belong to the part
-rather than to whoever analyses it — a bracket is bolted down at the same holes whichever solver is asked:
+rather than to whoever analyses it — a bracket is bolted down at the same holes whichever solver is asked. The
+section is a map of named scenarios, one question each:
 
 ```yaml
 parts:
@@ -73,18 +74,20 @@ parts:
       m3-screw: {left: ..., right: ...}
       hook:
     fea:
-      fix:
-        - m3-screw          # every instance of this interface is held still
-      load:
-        hook: 5 kg          # every instance of this one carries this
+      loaded:                 # the scenario's name
+        fix:
+          - m3-screw          # every instance of this interface is held still
+        load:
+          hook: 5 kg          # every instance of this one carries this
 ```
 
 Then:
 
 ```shell
-pc cae fea :bracket                 # the model, and the findings
+pc cae fea :bracket                 # every scenario: the models, and the findings
+pc cae fea -f loaded :bracket       # just this one
 pc cae fea --json :bracket          # the findings as the JSON array they are
-pc test -f fea :bracket             # the same analysis, as a check
+pc test -f fea :bracket             # the same analyses, as a check
 ```
 
 `load` values are forces. Write a number and a unit — `n`, `nm`, `mn`, `kn` or `newton` for force, `mg`, `g`,
@@ -95,26 +98,28 @@ before this package sees it, so everything here is newtons.
 A force written that way is applied **straight down**, along the part's -Z, which is where a weight goes. One
 written as **three**, `[x, y, z]` in the part's own frame, is applied **along that direction** — what a
 simulation measured pushing on a part is seldom straight down. And the part is weighed at 9.81 m/s² along -Z
-(`self_weight`), unless its `fea:` states **`gravity:`**, the acceleration of free fall it is analysed in, in
-its own frame: a part a simulation found upside down, or accelerating, is weighed by `g - a`, and a gravity of
-nought weighs nothing:
+(`self_weight`), unless its `fea:` scenario states **`gravity:`**, the acceleration of free fall it is analysed
+in, in its own frame: a part a simulation found upside down, or accelerating, is weighed by `g - a`, and a
+gravity of nought weighs nothing:
 
 ```yaml
     fea:
-      fix:
-        //pub/robotics/parts/gobilda:4xM4-16mm-pattern-threaded-thru-4mm: [outer]
-      load:
-        "//pub/robotics/parts/gobilda:gear-28t;module=1.25,shift=0.2":
-          "13-tooth": [0 N, -2.7 N, -155.2 N]   # the tooth the worm holds it by
-      gravity: [0, -8.962, -3.990]              # the gear stands on its edge
+      on-its-edge:
+        fix:
+          //pub/robotics/parts/gobilda:4xM4-16mm-pattern-threaded-thru-4mm: [outer]
+        load:
+          "//pub/robotics/parts/gobilda:gear-28t;module=1.25,shift=0.2":
+            "13-tooth": [0 N, -2.7 N, -155.2 N]   # the tooth the worm holds it by
+        gravity: [0, -8.962, -3.990]              # the gear stands on its edge
 ```
 
 `partcad.yaml` says so with `reads: [force, gravity]` on the `fea` file type: PartCAD hands either over only
 to an implementation that says it reads it, and refuses rather than have one answer as if neither had been
 written. `cfd` reads neither.
 
-The result model is written to `<part>.<analysis>.glb` and shown in the PartCAD Viewer's FEA and CFD tabs,
-turned and zoomed like any other 3D object. The findings are listed under it.
+Each scenario's model is written to `<part>.<analysis>.<scenario>.glb` (`bracket.fea.loaded.glb`) and shown
+in the PartCAD Viewer's FEA and CFD tabs, turned and zoomed like any other 3D object. The findings are listed
+under it.
 
 ## What it is
 
@@ -186,12 +191,13 @@ bore as a part, not the casting. `fix:` names the walls (no slip), `load:` names
 
 ```yaml
     cfd:
-      fix:
-        - pipe-wall     # no slip
-      load:
-        pipe-inlet: 5 mN
-      outlet:
-        - pipe-outlet   # held at the reference pressure
+      poiseuille:
+        fix:
+          - pipe-wall     # no slip
+        load:
+          pipe-inlet: 5 mN
+        outlet:
+          - pipe-outlet   # held at the reference pressure
 ```
 
 A force on a boundary divided by the area of that boundary is a pressure, and pressure is what an

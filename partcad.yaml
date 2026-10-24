@@ -130,7 +130,7 @@ cae:
     # Whether gravity acts on the part as well as the declared loads. On,
     # because a load declared as a mass is a thing being carried and the part
     # carrying it weighs something too. 9.81 m/s^2 along -Z, unless the part
-    # states 'gravity:' in its 'fea:', which replaces this.
+    # states 'gravity:' in its 'fea:' scenario, which replaces this.
     self_weight: true
 
     # How far from a port a mesh node may be and still belong to it, as a
