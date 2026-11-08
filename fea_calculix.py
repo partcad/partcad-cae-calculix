@@ -18,7 +18,7 @@ What PartCAD hands over is in the request:
 
 and what goes back is a coloured glTF at `path` plus `findings`: what the
 analysis has to say about the part. An empty `findings` is a pass, and is what
-`pc test`'s `fea` check requires.
+`pc qual test`'s `fea` check requires.
 
 Two decisions are worth stating because they are the ones that make an answer
 mean something:
@@ -57,8 +57,8 @@ sys.path.append(os.path.dirname(__file__))
 import calculix_common as ccx  # noqa: E402
 
 # The severities a finding carries. PartCAD does not interpret them -- any
-# finding at all fails `pc test` -- but they order the list `pc cae` prints and
-# colour the one the IDE shows.
+# finding at all fails `pc qual test` -- but they order the list `pc cae`
+# prints and colour the one the IDE shows.
 ERROR = "error"
 WARNING = "warning"
 INFO = "info"

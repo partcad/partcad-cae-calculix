@@ -19,7 +19,7 @@
 #     condition landed on, with their locations.
 #   * It answers with `findings` beside `success`: the JSON array of what the
 #     analysis has to say about the part. An empty one is a pass, and is what
-#     `pc test` requires.
+#     `pc qual test` requires.
 
 name: //pub/feature/cae/calculix
 desc: |

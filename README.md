@@ -84,7 +84,7 @@ Then:
 ```shell
 pc cae fea :bracket                 # the model, and the findings
 pc cae fea --json :bracket          # the findings as the JSON array they are
-pc test -f fea :bracket             # the same analysis, as a check
+pc qual test -f fea :bracket        # the same analysis, as a check
 ```
 
 `load` values are forces. Write a number and a unit — `n`, `nm`, `mn`, `kn` or `newton` for force, `mg`, `g`,
@@ -128,7 +128,7 @@ what it writes, and everything else is a parameter handed to the script:
 | `cfd` | Incompressible flow through the part, read as the fluid volume | a glTF coloured by speed |
 
 Both answer with **findings**: the JSON array of what the analysis has to say about the part. An empty one is
-a pass, which is what `pc test`'s `fea` and `cfd` checks require.
+a pass, which is what `pc qual test`'s `fea` and `cfd` checks require.
 
 Every parameter is documented in `partcad.yaml` beside its default — the mesh density, the material, the
 thresholds that decide what counts as a finding. A package re-tunes any of them in a `cae:` section of its
@@ -261,8 +261,8 @@ installation candidate for it, and the only name left matching `calculix` is the
 
 When the solver or the mesher is not there, the sentence names both ways to get it, because the message cannot
 tell which kind of machine it is talking to and naming one would send half its readers to the wrong one. That
-sentence is what `pc cae` prints and what `pc test` fails with; PartCAD adds which implementation was asked and
-which machine it did not work on.
+sentence is what `pc cae` prints and what `pc qual test` fails with; PartCAD adds which implementation was
+asked and which machine it did not work on.
 
 Not running is **not** a skip. A part that declares `fea:` has asked a question, and this package answering
 nothing has failed — which is the point of declaring the section at all.
