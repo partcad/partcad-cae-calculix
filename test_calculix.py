@@ -262,7 +262,7 @@ def test_a_second_order_tetrahedron_is_reordered_for_calculix():
     gmsh_order = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     keyword, elements = ccx._tetrahedra(_FakeGmsh(11, gmsh_order), 2)
     assert keyword == "C3D10"
-    (_id, connectivity) = elements[0]
+    _id, connectivity = elements[0]
     assert connectivity == [1, 2, 3, 4, 5, 6, 7, 8, 10, 9]
     # The corners and the first four mid-side nodes are untouched; only the last
     # two move, and they move by swapping rather than by rotating.
@@ -727,8 +727,9 @@ def test_the_workflow_and_the_dockerfile_name_one_base_image():
     inspected = re.search(r"^\s*BASE_IMAGE:\s*(\S+)\s*$", workflow, re.MULTILINE)
     assert inspected, "the workflow names no BASE_IMAGE"
 
-    assert built_from.group(1) == inspected.group(1), (
-        "the Dockerfile builds FROM %s but the workflow probes %s" % (built_from.group(1), inspected.group(1))
+    assert built_from.group(1) == inspected.group(1), "the Dockerfile builds FROM %s but the workflow probes %s" % (
+        built_from.group(1),
+        inspected.group(1),
     )
 
 
@@ -930,3 +931,55 @@ def test_second_order_elements_are_meshed_with_straight_edges(monkeypatch):
     assert asked["Mesh.ElementOrder"] == 2
     assert asked["Mesh.SecondOrderLinear"] == 1
     assert asked["generated"] == 3
+
+
+# --------------------------------------------------------------------------- #
+# What the colours stand for                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_allowable_is_the_yield_strength_over_the_safety_factor():
+    import fea_calculix
+
+    assert fea_calculix._allowable({"yield_strength": 3.0e8, "safety_factor": 2.0}) == pytest.approx(1.5e8)
+    # The defaults: steel's 250 MPa at 1.5.
+    assert fea_calculix._allowable({}) == pytest.approx(2.5e8 / 1.5)
+
+
+def test_by_default_the_colours_run_to_the_runs_own_peak():
+    """The picture this implementation has always drawn."""
+    import fea_calculix
+
+    assert fea_calculix._top({"yield_strength": 5.0e7}) is None
+    assert fea_calculix._top({"yield_strength": 5.0e7, "scale_to_allowable": False}) is None
+    assert fea_calculix._top({"yield_strength": 5.0e7, "scale_to_allowable": "false"}) is None
+
+
+@pytest.mark.parametrize("flag", [True, "true", "yes", 1])
+def test_scaled_to_the_allowable_the_top_of_the_ramp_is_the_allowable(flag):
+    import fea_calculix
+
+    request = {"yield_strength": 5.0e7, "safety_factor": 1.25, "scale_to_allowable": flag}
+    assert fea_calculix._top(request) == pytest.approx(4.0e7)
+
+
+def test_scaled_to_the_allowable_a_stronger_material_looks_cooler():
+    """The same stresses, one part of PLA and one of steel: no longer one picture."""
+    import fea_calculix
+
+    field = [0.0, 1.0e7, 2.0e7]
+    pla = ccx.colours_for(field, low=0.0, high=fea_calculix._top({"yield_strength": 5.0e7, "scale_to_allowable": True}))
+    steel = ccx.colours_for(
+        field, low=0.0, high=fea_calculix._top({"yield_strength": 2.5e8, "scale_to_allowable": True})
+    )
+    # The most stressed node is redder in PLA than in steel ...
+    assert pla[-1][0] > steel[-1][0]
+    # ... and against its own peak, both would have been the same red.
+    assert tuple(ccx.colours_for(field, low=0.0)[-1]) == tuple(ccx.colours_for([0.0, 5.0, 10.0], low=0.0)[-1])
+
+
+def test_the_scale_is_declared_off_so_the_picture_does_not_change_under_anyone():
+    import yaml
+
+    config = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), "partcad.yaml")))
+    assert config["cae"]["fea"]["scale_to_allowable"] is False

@@ -104,6 +104,11 @@ cae:
     # The material, when the part does not name one PartCAD can resolve. Steel,
     # because a part with no stated material is a part nobody has thought about
     # yet, and answering it as steel is the answer least likely to be flattering.
+    # A part whose `material` is a catalogued one -- `//pub/std/manufacturing/
+    # material/metal:al-6061-t6`, say -- is analysed as that material: PartCAD
+    # hands this script the material's `youngsModulus`, `poissonsRatio`,
+    # `yieldStrength` and `density` in place of each default below that neither
+    # the package, the part nor the run re-tunes, where that PartCAD does so.
     #
     # `youngs_modulus` and `yield_strength` are in pascals, `poissons_ratio` is
     # dimensionless, `density` is kg/m^3.
@@ -126,6 +131,15 @@ cae:
     # useless because it moves.
     safety_factor: 1.5
     max_displacement: 1.0
+
+    # What the colours of the model stand for. Off, blue is no stress and red
+    # is this run's own peak, whatever that is: the picture that shows where a
+    # part is loaded, and the one this implementation has always drawn. On,
+    # red is the allowable stress -- `yield_strength` over `safety_factor`,
+    # the material's when the part names one -- and anything past it stays
+    # red: a stronger material makes the same part look cooler, a part close
+    # to failing looks it, and two runs read on one scale.
+    scale_to_allowable: false
 
     # Whether gravity acts on the part as well as the declared loads. On,
     # because a load declared as a mass is a thing being carried and the part
@@ -154,6 +168,11 @@ cae:
 
     # The fluid. Air at 20 degrees; `density` is kg/m^3 and `viscosity` is the
     # dynamic viscosity in Pa*s. See the note on exponents under `fea` above.
+    # A part made of a fluid -- a material that states a `viscosity`, such as
+    # //pub/std/manufacturing/material/fluid:water -- is solved as that fluid
+    # instead: PartCAD hands this script its `density` and `viscosity`. A part
+    # made of anything else hands a fluid analysis nothing, since the part is
+    # meshed as the fluid in it and its own density is not that fluid's.
     density: 1.204
     viscosity: 1.82e-5
 
