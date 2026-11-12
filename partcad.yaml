@@ -106,9 +106,11 @@ cae:
     # yet, and answering it as steel is the answer least likely to be flattering.
     # A part whose `material` is a catalogued one -- `//pub/std/manufacturing/
     # material/metal:al-6061-t6`, say -- is analysed as that material: PartCAD
-    # hands this script the material's `youngsModulus`, `poissonsRatio`,
-    # `yieldStrength` and `density` in place of each default below that neither
-    # the package, the part nor the run re-tunes, where that PartCAD does so.
+    # 0.10.14 and later hand this script the material's `youngsModulus`,
+    # `poissonsRatio`, `yieldStrength` and `density` in place of each default
+    # below that neither the package, the part nor the run re-tunes. An older
+    # PartCAD hands over only what is stated, so there a part of anything but
+    # steel needs its numbers in a `cae:` section.
     #
     # `youngs_modulus` and `yield_strength` are in pascals, `poissons_ratio` is
     # dimensionless, `density` is kg/m^3.
@@ -172,7 +174,10 @@ cae:
     # //pub/std/manufacturing/material/fluid:water -- is solved as that fluid
     # instead: PartCAD hands this script its `density` and `viscosity`. A part
     # made of anything else hands a fluid analysis nothing, since the part is
-    # meshed as the fluid in it and its own density is not that fluid's.
+    # meshed as the fluid in it and its own density is not that fluid's. That
+    # is the PartCAD release that carries partcad/partcad#952; 0.10.14 up to it
+    # hands over the `density` of whatever the part is made of, solid or not,
+    # so there state `density` in the part's `cae:` section.
     density: 1.204
     viscosity: 1.82e-5
 

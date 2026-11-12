@@ -983,3 +983,21 @@ def test_the_scale_is_declared_off_so_the_picture_does_not_change_under_anyone()
 
     config = yaml.safe_load(open(os.path.join(os.path.dirname(__file__), "partcad.yaml")))
     assert config["cae"]["fea"]["scale_to_allowable"] is False
+
+
+def test_the_summary_gives_the_peak_as_a_share_of_the_allowable():
+    import fea_calculix
+
+    line = fea_calculix._summary(1.0e8, 0.5, 1234, {"yield_strength": 3.0e8, "safety_factor": 1.5})
+    assert "50% of the allowable 200 MPa" in line
+    assert "1234 elements" in line
+
+
+def test_a_yield_strength_of_nought_is_said_rather_than_divided_by():
+    """The summary is said after the solve: a ZeroDivisionError there would lose the run."""
+    import fea_calculix
+
+    line = fea_calculix._summary(1.0e8, 0.5, 1234, {"yield_strength": 0})
+    assert "not positive" in line
+    # Nothing to scale the colours against: the run's own peak, not one colour.
+    assert fea_calculix._top({"yield_strength": 0, "scale_to_allowable": True}) is None

@@ -141,18 +141,25 @@ def _analyse(path, request):
         "findings": findings,
         # Reported whether or not there is a finding: "it passed, at 62% of
         # yield" and "it passed, at 3%" are different answers.
-        "warnings": [
-            "Peak von Mises stress %.3g MPa (%.0f%% of the allowable %.3g MPa), peak displacement %.3g mm, "
-            "over %d elements"
-            % (
-                peak_stress / 1e6,
-                100.0 * peak_stress / _allowable(request),
-                _allowable(request) / 1e6,
-                peak_displacement,
-                len(mesh.elements),
-            )
-        ],
+        "warnings": [_summary(peak_stress, peak_displacement, len(mesh.elements), request)],
     }
+
+
+def _summary(peak_stress, peak_displacement, elements, request):
+    """The one line said of every run: its peaks, and the peak stress as a share of what the part is held to."""
+    allowable = _allowable(request)
+    if allowable > 0:
+        share = "%.0f%% of the allowable %.3g MPa" % (100.0 * peak_stress / allowable, allowable / 1e6)
+    else:
+        # A yield strength of nought is a configuration nobody meant, and
+        # '_verdict' says so; the summary still has to be said.
+        share = "no allowable stress: 'yield_strength' is not positive"
+    return "Peak von Mises stress %.3g MPa (%s), peak displacement %.3g mm, over %d elements" % (
+        peak_stress / 1e6,
+        share,
+        peak_displacement,
+        elements,
+    )
 
 
 def _allowable(request):
@@ -180,7 +187,11 @@ def _top(request):
     scale. The material decides the allowable, which is why a part that names
     one PartCAD can resolve is coloured against its own.
     """
-    return _allowable(request) if _flag(request.get("scale_to_allowable", False)) else None
+    if not _flag(request.get("scale_to_allowable", False)):
+        return None
+    allowable = _allowable(request)
+    # Nothing to scale against: the run's own peak, rather than one colour.
+    return allowable if allowable > 0 else None
 
 
 def _verdict(peak_stress, peak_displacement, request):
