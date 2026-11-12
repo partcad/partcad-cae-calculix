@@ -1001,3 +1001,78 @@ def test_a_yield_strength_of_nought_is_said_rather_than_divided_by():
     assert "not positive" in line
     # Nothing to scale the colours against: the run's own peak, not one colour.
     assert fea_calculix._top({"yield_strength": 0, "scale_to_allowable": True}) is None
+
+
+# --------------------------------------------------------------------------- #
+# Colours a viewer blends correctly                                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_split_at_levels_leaves_every_piece_inside_one_stretch_of_the_ramp():
+    """What makes blending the corners' colours the colour of the blended value."""
+    points = [(0, 0, 0), (2, 0, 0), (0, 2, 0)]
+    values = [0.0, 8.0, 3.0]
+    levels = [0, 1, 2, 3, 4]
+    out_points, out_triangles, out_values = ccx.split_at_levels(points, [(0, 1, 2)], values, levels)
+    assert out_points[:3] == [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 2.0, 0.0)]
+    area = 0.0
+    for triangle in out_triangles:
+        corner = [out_values[k] for k in triangle]
+        assert max(corner) - min(corner) <= 1 + 1e-9 or min(corner) >= levels[-1] - 1e-9, corner
+        (ax, ay, _), (bx, by, _), (cx, cy, _) = (out_points[k] for k in triangle)
+        signed = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay)
+        # The winding is the original's: the PartCAD Viewer draws a result front-side only.
+        assert signed >= -1e-12
+        area += signed / 2
+    assert area == pytest.approx(2.0)
+    for point, value in zip(out_points[3:], out_values[3:]):
+        assert value in levels
+        assert 4.0 * point[0] + 1.5 * point[1] == pytest.approx(value)
+
+
+def test_two_triangles_sharing_an_edge_share_the_points_cut_on_it():
+    """Otherwise the surface opens a crack along every cut."""
+    points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)]
+    values = [0.0, 2.0, 0.0, 2.0]
+    _, triangles, out_values = ccx.split_at_levels(points, [(0, 1, 2), (1, 3, 2)], values, [1.0])
+    assert len(out_values) == 4 + 3
+    assert len(triangles) > 2
+
+
+def _written(tmp_path, coordinates, triangles, values, **scale):
+    """What `write_glb` wrote, read back: points (mm, Z-up again) and the colour of each."""
+    trimesh = pytest.importorskip("trimesh")
+    path = tmp_path / "result.glb"
+    ccx.write_glb(str(path), coordinates, triangles, values, **scale)
+    mesh = trimesh.load(str(path), force="mesh", process=False)
+    vertices = np.asarray(mesh.vertices) * ccx.MM_PER_M
+    # Y-up back to Z-up: (x, y, z) -> (x, -z, y).
+    points = np.column_stack((vertices[:, 0], -vertices[:, 2], vertices[:, 1]))
+    return points, np.asarray(mesh.faces), np.asarray(mesh.visual.vertex_colors)[:, :3]
+
+
+def test_an_overloaded_region_is_drawn_red_out_to_where_it_is_overloaded(tmp_path):
+    """The case a straight blend got wrong: an edge from nothing to twice the top of the scale.
+
+    Halfway along, the field is at the top of the scale. Blended between a blue
+    corner and a red one, that point was the middle of the ramp; drawn now, the
+    edge is cut there, and everything past it is red.
+    """
+    points, faces, colours = _written(
+        tmp_path, [(0, 0, 0), (1, 0, 0), (0, 1, 0)], [(0, 1, 2)], [0.0, 2.0, 0.0], low=0.0, high=1.0
+    )
+    red = tuple(ccx.colours_for([1.0], low=0.0, high=1.0)[0][:3])
+    halfway = [k for k, (x, y, _) in enumerate(points) if abs(x - 0.5) < 1e-6 and abs(y) < 1e-6]
+    assert halfway and all(tuple(colours[k]) == red for k in halfway)
+    beyond = [face for face in faces if min(points[k][0] for k in face) >= 0.5 - 1e-6]
+    assert beyond and all(tuple(colours[k]) == red for face in beyond for k in face)
+    # Every triangle is inside one stretch of the ramp, or wholly past its top.
+    stretch = 1.0 / (len(ccx._RAMP) - 1)
+    for face in faces:
+        corner = [2 * points[k][0] for k in face]
+        assert max(corner) - min(corner) <= stretch + 1e-6 or min(corner) >= 1.0 - 1e-6, corner
+
+
+def test_a_uniform_field_is_drawn_uncut(tmp_path):
+    points, faces, colours = _written(tmp_path, [(0, 0, 0), (1, 0, 0), (0, 1, 0)], [(0, 1, 2)], [5.0, 5.0, 5.0])
+    assert len(points) == 3 and len(faces) == 1 and len({tuple(c) for c in colours}) == 1

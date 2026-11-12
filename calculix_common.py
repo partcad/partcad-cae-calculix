@@ -602,15 +602,103 @@ def colours_for(values, low=None, high=None):
     return colours
 
 
+def split_at_levels(points, triangles, values, levels):
+    """The same surface, its triangles cut wherever the field crosses one of 'levels'.
+
+    A viewer blends the colours of a triangle's corners across it, which is the
+    colour of the blended value only while the ramp is a straight line between
+    the corners' values. It is not where the corners straddle a stop of the ramp,
+    nor where they straddle 'low' or 'high', past which the colour stops changing:
+    an edge from nothing to twice the top of the scale is red only at its far
+    end, where the value it stands for is past the top for half its length. Cut
+    at every level a triangle spans, each piece is inside one straight stretch of
+    the ramp (or past one end of it, one colour), and the blend is exact.
+
+    The field is linear across a triangle, so each cut is a straight line and
+    each piece a convex polygon, fanned into triangles. A point on an edge is
+    made once, for that edge and that level, so the two triangles sharing an
+    edge share its points and the surface stays closed; the winding is kept.
+    Returns new 'points', 'triangles' and 'values'; the points given are kept,
+    in order, at the front.
+
+    The same cut PartCAD's `cae_support.write_glb` makes, for the other
+    implementations; this package draws with a writer of its own.
+    """
+    points = [tuple(float(c) for c in point) for point in points]
+    values = [float(value) for value in values]
+    levels = sorted({float(level) for level in levels})
+    made = {}
+
+    def cut(i, j, level):
+        key = (min(i, j), max(i, j), level)
+        if key not in made:
+            a, b = key[0], key[1]
+            t = (level - values[a]) / (values[b] - values[a])
+            points.append(tuple(pa + (pb - pa) * t for pa, pb in zip(points[a], points[b])))
+            values.append(level)
+            made[key] = len(points) - 1
+        return made[key]
+
+    def side(polygon, level, below):
+        """The part of a convex polygon on one side of a level, as point indices."""
+        kept = []
+        for k, i in enumerate(polygon):
+            j = polygon[(k + 1) % len(polygon)]
+            inside_i = values[i] <= level if below else values[i] >= level
+            inside_j = values[j] <= level if below else values[j] >= level
+            if inside_i:
+                kept.append(i)
+            if inside_i != inside_j and values[i] != level and values[j] != level:
+                kept.append(cut(i, j, level))
+        return kept
+
+    result = []
+    for triangle in triangles:
+        polygon = [int(k) for k in triangle]
+        corner = [values[k] for k in polygon]
+        spanned = [level for level in levels if min(corner) < level < max(corner)]
+        pieces = []
+        for level in spanned:
+            below = side(polygon, level, below=True)
+            if len(below) >= 3:
+                pieces.append(below)
+            polygon = side(polygon, level, below=False)
+        pieces.append(polygon)
+        for piece in pieces:
+            # Cutting on an edge's own end can repeat a point; a piece is drawn
+            # by its distinct corners.
+            distinct = [k for n, k in enumerate(piece) if k != piece[n - 1]]
+            for n in range(1, len(distinct) - 1):
+                result.append((distinct[0], distinct[n], distinct[n + 1]))
+    return points, result, values
+
+
 def write_glb(path, coordinates, triangles, values, low=None, high=None):
     """The result surface as a binary glTF, coloured by the field.
 
     Metres and Y-up, which is what glTF is and what the PartCAD Viewer expects of
     anything it draws: the conversion from PartCAD's millimetre, Z-up geometry
     happens here because this is the last place that knows which it is.
+
+    Coloured per point, which every viewer draws -- the Digital Thread's painter
+    has no textures -- with the triangles cut at each stop of the ramp first
+    (`split_at_levels`), so that the colour blended across a triangle is the
+    colour of the value there: a region past `high` is drawn wholly in the top
+    colour, out to where the field crosses it.
     """
     import numpy as np
     import trimesh
+
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    low = (float(finite.min()) if finite.size else 0.0) if low is None else float(low)
+    high = (float(finite.max()) if finite.size else 0.0) if high is None else float(high)
+    # What a value that cannot be placed is drawn as: the bottom colour.
+    values = np.where(np.isfinite(values), values, low)
+    if high > low:
+        stops = len(_RAMP) - 1
+        levels = [low + (high - low) * k / stops for k in range(stops + 1)]
+        coordinates, triangles, values = split_at_levels(coordinates, triangles, values, levels)
 
     vertices = np.asarray(coordinates, dtype=float) / MM_PER_M
     # Z-up to Y-up: (x, y, z) -> (x, z, -y). The same rotation build123d's glTF
