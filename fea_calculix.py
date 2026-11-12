@@ -128,7 +128,7 @@ def _analyse(path, request):
             raise ccx.SolverFailed("CalculiX produced no stresses: the analysis did not converge")
 
         stress_field = ccx.field_per_node(mesh, stress)
-        ccx.write_glb(path, mesh.coordinates, mesh.surface_triangles(), stress_field, low=0.0)
+        ccx.write_glb(path, mesh.coordinates, mesh.surface_triangles(), stress_field, low=0.0, high=_top(request))
 
     peak_stress = float(np.max(stress_field))
     # Displacement comes back in metres, like everything else in the deck; a
@@ -141,11 +141,57 @@ def _analyse(path, request):
         "findings": findings,
         # Reported whether or not there is a finding: "it passed, at 62% of
         # yield" and "it passed, at 3%" are different answers.
-        "warnings": [
-            "Peak von Mises stress %.3g MPa, peak displacement %.3g mm, over %d elements"
-            % (peak_stress / 1e6, peak_displacement, len(mesh.elements))
-        ],
+        "warnings": [_summary(peak_stress, peak_displacement, len(mesh.elements), request)],
     }
+
+
+def _summary(peak_stress, peak_displacement, elements, request):
+    """The one line said of every run: its peaks, and the peak stress as a share of what the part is held to."""
+    allowable = _allowable(request)
+    if allowable > 0:
+        share = "%.0f%% of the allowable %.3g MPa" % (100.0 * peak_stress / allowable, allowable / 1e6)
+    else:
+        # A yield strength of nought is a configuration nobody meant, and
+        # '_verdict' says so; the summary still has to be said.
+        share = "no allowable stress: 'yield_strength' is not positive"
+    return "Peak von Mises stress %.3g MPa (%s), peak displacement %.3g mm, over %d elements" % (
+        peak_stress / 1e6,
+        share,
+        peak_displacement,
+        elements,
+    )
+
+
+def _allowable(request):
+    """The stress a part is held to: its yield strength over the safety factor, in Pa."""
+    yield_strength = float(request.get("yield_strength", 2.5e8))
+    safety_factor = float(request.get("safety_factor", 1.5))
+    return yield_strength / max(safety_factor, 1e-9)
+
+
+def _flag(value):
+    """A yes or a no, however a configuration wrote it."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def _top(request):
+    """The stress the top of the colour ramp stands for: the allowable one, or None for this run's own peak.
+
+    Against its own peak, every run's hottest node is the same red, which is the
+    picture that shows *where* a part is loaded -- and the one in which a part
+    of steel and the same part of PLA look identical. Against the allowable
+    stress, red means "at what this part is held to" and anything past it stays
+    red: the same part looks cooler for being stronger, and two runs read on one
+    scale. The material decides the allowable, which is why a part that names
+    one PartCAD can resolve is coloured against its own.
+    """
+    if not _flag(request.get("scale_to_allowable", False)):
+        return None
+    allowable = _allowable(request)
+    # Nothing to scale against: the run's own peak, rather than one colour.
+    return allowable if allowable > 0 else None
 
 
 def _verdict(peak_stress, peak_displacement, request):
@@ -158,7 +204,7 @@ def _verdict(peak_stress, peak_displacement, request):
     findings = []
     yield_strength = float(request.get("yield_strength", 2.5e8))
     safety_factor = float(request.get("safety_factor", 1.5))
-    allowable = yield_strength / max(safety_factor, 1e-9)
+    allowable = _allowable(request)
 
     if peak_stress > yield_strength:
         findings.append(
