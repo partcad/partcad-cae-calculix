@@ -137,8 +137,9 @@ cae:
     # What the colours of the model stand for. Off, blue is no stress and red
     # is this run's own peak, whatever that is: the picture that shows where a
     # part is loaded, and the one this implementation has always drawn. On,
-    # red is the allowable stress -- `yield_strength` over `safety_factor`,
-    # the material's when the part names one -- and anything past it stays
+    # red is the allowable stress -- the `yield_strength` this run is handed
+    # over `safety_factor`, which is the part's material's only where PartCAD
+    # fills it (see above) -- and anything past it stays
     # red: a stronger material makes the same part look cooler, a part close
     # to failing looks it, and two runs read on one scale.
     scale_to_allowable: false

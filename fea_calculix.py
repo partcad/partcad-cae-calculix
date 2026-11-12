@@ -184,8 +184,9 @@ def _top(request):
     of steel and the same part of PLA look identical. Against the allowable
     stress, red means "at what this part is held to" and anything past it stays
     red: the same part looks cooler for being stronger, and two runs read on one
-    scale. The material decides the allowable, which is why a part that names
-    one PartCAD can resolve is coloured against its own.
+    scale. The allowable is the `yield_strength` and `safety_factor` this run is
+    handed, whoever stated them: the package, the part, the run, this
+    implementation's default, or -- where PartCAD fills it -- the part's material.
     """
     if not _flag(request.get("scale_to_allowable", False)):
         return None
